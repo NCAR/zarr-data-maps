@@ -5,6 +5,10 @@ Create Zarr data files in a format that can be access by [carbonplan/maps](https
 Setup and activate conda environment.
 `$ conda install --file requirements.txt`
 
+#### Setting up Jupyter environment 
+`$ mamba install ipykernel`  # testing mamba install ipytree ipykernel to see if order helps
+`$ python -m ipykernel install --user --name=zarr`
+
 ## Create Data
 Setup paths in `create_icar_zarr_.py`. Will become command line arguments in the future.
 `$ python3 create_icar_zarr.py`

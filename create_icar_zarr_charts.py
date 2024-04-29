@@ -29,7 +29,6 @@ def main():
     ds = drop_extra_dimensions(ds)
     ds = handle_time_dimension(ds)
 
-    # ds = convert_to_zarr_format(ds) # already in single precision
     write_to_zarr(ds, method, model)
 
     print('fin')
@@ -63,8 +62,8 @@ def handle_time_dimension(ds):
     print("   - if silent failure, run on interactive node")
 
     # --- smaller time slice for testing
-    # print("REMOVE 1999-2001 TIME SLICE")
-    # ds = ds.sel(time=slice("1999","2001"))
+    print("REMOVE 1999-2001 TIME SLICE")
+    ds = ds.sel(time=slice("1999","2001"))
 
     spatial_avg_precip = ds['prec'].mean(dim=['y', 'x'])
     spatial_avg_temp = ds['tavg'].mean(dim=['y', 'x'])
@@ -85,7 +84,7 @@ def write_to_zarr(ds, method, model):
     prec_save_path = save_path + '/prec'
     tavg_save_path = save_path + '/tavg'
 
-    print("WARNING: NEED TO ADD LARGER TIME FRAME")
+    print("  WARNING: NEED TO ADD LARGER TIME FRAME")
     # write precip
     z_prec = zarr.open(prec_save_path, mode='w', shape=len(ds.prec),
                   compressor=None, dtype=np.float32)
@@ -95,6 +94,10 @@ def write_to_zarr(ds, method, model):
     z_temp = zarr.open(tavg_save_path, mode='w', shape=len(ds.tavg),
                   compressor=None, dtype=np.float32)
     z_temp[:] = ds.tavg.data
+
+    # write attributes
+    z_prec.attrs['TIME START'] = '1980'
+    z_temp.attrs['TIME START'] = '1980'
 
 if __name__ == "__main__":
     main()
