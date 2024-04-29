@@ -1,12 +1,12 @@
 # ICAR Zarr Data
 This repository is for creating and hosting Zarr output for the [ICAR Maps](https://github.com/scrasmussen/icar-maps) website.
-To use existing data, see [Host ICAR Zarr Data](##Host ICAR Zarr Data) to copy existing files and starting server.
-To create Zarra dataset see [ICAR Zarr Data](##ICAR Zarr Data) to copy existing files and starting server.
+To use existing data, see [Host ICAR Zarr Data](#host-icar-zarr-data) to copy existing files and starting server.
+To create Zarra dataset see [ICAR Zarr Data](#icar-zarr-data) to copy existing files and starting server.
 
 
 ## Host ICAR Zarr Data
 ### Prepare Data
-Either [create data](###Create Data) or copy it over.
+Either [create data](#create-data) or copy it over.
 To copy the data edit the [Makefile](Makefile) and run `make scp untar` to copy the data from Derecho and untar it.
 ### Host Site
 Once data is created the user can host the data locally for local development.
