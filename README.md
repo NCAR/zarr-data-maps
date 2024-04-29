@@ -5,20 +5,34 @@ To create Zarra dataset see [ICAR Zarr Data](#icar-zarr-data) to copy existing f
 
 
 ## Host ICAR Zarr Data
-### Prepare Data
+After choosing one of the following two options to host the data, it will be available at [localhost:4000](http://localhost:4000) and can be accessed from a browser.
+
+### Host on Derecho
+1. Login to Derecho and start server locally. Note or double check the login node number accessed with `$ echo $HOST`.
+```
+$ python host_server.py
+```
+2. From local computer SSH into the login number hosting the server. The `-L` argument enables port forwarding.
+```
+ssh -L 4000:localhost:4000 username@derecho[1-7].hpc.ucar.edu
+```
+
+
+### Host locally
+#### Prepare Data
 Either [create data](#create-data) or copy it over.
 To copy the data edit the [Makefile](Makefile) and run `make scp untar` to copy the data from Derecho and untar it.
-### Host Site
+#### Host Site
 Once data is created the user can host the data locally for local development.
 Running `make host` or the following command will start a local server.
 ```
 $ python host_server.py
 ```
-The data is available at `localhost:4000` and can be accessed from a browser.
 
 
 
-## ICAR Zarr Data
+
+## Create ICAR Zarr Data
 Create Zarr data files in a format that can be accessed by [carbonplan/maps](https://github.com/carbonplan/maps) websites.
 This is setup for generation of data that can be access locally by [icar/maps](https://github.com/scrasmussen/icar-maps).
 
