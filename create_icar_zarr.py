@@ -2,6 +2,7 @@ import argparse
 import os
 import pandas as pd
 import ndpyramid as ndp
+import numpy as np
 import rioxarray
 import sys
 import xarray as xr
@@ -10,7 +11,28 @@ import zarr
 from tools import dimensionNames, handleArgs
 
 print("ndpyramid Version = ", ndp.__version__)
+
+LEVELS = 4
+# LEVELS = 1
+PIXELS_PER_TILE = 512 # this one too high
+PIXELS_PER_TILE = 256
+
+
+# Define the global grid (covering the entire world)
+global_lon = np.linspace(-180, 180, int(360/0.125 + 1))  # 0.125-degree resolution
+global_lat = np.linspace(-90, 90, int(180/0.125 + 1))    # 0.125-degree resolution
+
+# world_grid = xr.Dataset({
+#     'x': (['x'], global_lat),
+#     'y': (['y'], global_lon)
+# })
+
+world_grid = xr.Dataset({
+    'lat': (['lat'], global_lat),
+    'lon': (['lon'], global_lon)
+})
 # sys.exit()
+
 # --- combination of downscaling methods and climate models to create data
 # old
 # downscaling_methods = [
@@ -25,41 +47,55 @@ print("ndpyramid Version = ", ndp.__version__)
 #     'miroc5',]
 # new
 # [model].[method].ds.conus.metric.maps.nc
+
 downscaling_methods = [
     'ICAR',
-    # 'ICARwest',
+    'ICARwest',
     'GARD_r2',
     'GARD_r3',
-    # 'GARDwest',
     'LOCA_8th',
     'MACA',
-    'NASA-NEX',]
+    'NASA-NEX',
+    ]
+    # 'GARDwest',
 climate_models = [
     'ACCESS1-3',
     'CanESM2',
     'CCSM4',
     'MIROC5',
-    'NorESM1-M',]
+    'MRI-CGCM3',
+    'NorESM1-M',
+#    # 'modelmean',
+#    # ADD MRI-CGCM3, NorESM1 but are they there??
+    ]
+# climate_models = ['MRI-CGCM3']
 observation_datasets = [
     'CONUS404',
     'GMET',
+    'gridMET', # new
     'Livneh',
-    'Maurer',
+    'Maurer', # doesn't have new annual and snow variables
+    'nClimGrid', # new
     'NLDAS',
     'oldLivenh',
     'PRISM',]
 
+debug=False
+if (debug):
+    downscaling_methods = ['ICAR']
+    climate_models = ['ACCESS1-3']
+    observation_datasets = ['CONUS404']
+
+
 # set these somewhere else?
 VERSION = 2
-LEVELS = 6
-PIXELS_PER_TILE = 256
 time = 'time'
-time_slices=[slice("1980","2010"), slice("2070","2100")]
-time_slice_strs=['1980_2010', '2070_2100']
+# time_slices=[slice("1980","2010"), slice("2070","2100")]
+# time_slice_strs=['1980_2010', '2070_2100']
 # time_slice=slice("1980","2010")
 # time_slice_str='1980_2010'
-time_slice=slice("2070","2100")
-time_slice_str='2070_2100'
+future_time_slice=slice("2070","2100")
+future_time_slice_str='2070_2100'
 
 # testing new
 time_slice_str='1980_2010'
@@ -72,7 +108,7 @@ CLIMATE_SIGNAL=2
 
 
 class Dataset:
-    def __init__(self, method, model, past=None, future=None, rcp='', obs=None):
+    def __init__(self, method=None, model=None, past=None, future=None, metric=None, rcp='', obs=None):
         if (past != None) and not os.path.exists(past):
             print("ERROR: past path does not exist:", past)
             sys.exit()
@@ -80,10 +116,14 @@ class Dataset:
             print("ERROR: future path does not exist:", future)
             sys.exit()
         if (obs != None) and not os.path.exists(obs):
-            print("ERROR: obs for metrics path does not exist:", obs)
+            print("ERROR: obs path does not exist:", obs)
+            sys.exit()
+        if (metric != None) and not os.path.exists(metric):
+            print("ERROR: metric path does not exist:", metric)
             sys.exit()
         self.past_path = past
         self.future_path = future
+        self.metric_path = metric
         self.method = method
         self.model = model
         self.rcp = rcp
@@ -92,24 +132,30 @@ class Dataset:
         print("Dataset:")
         print("  past_path =", self.past_path)
         print("  future_path =", self.future_path)
+        print("  metric_path =", self.metric_path)
         print("  method =", self.method)
         print("  model =", self.model)
         print("  obs =", self.obs)
 
 
 class Options:
-    def __init__(self, input_path, past_path=None, future_path=None,
-                 metric_score_path=None, climate_signal_path=None, obs_path=None):
+    def __init__(self, input_path, input_obs_path, input_obs_file,
+                 past_path=None, future_path=None,
+                 metric_score_path=None, climate_signal_path=None,
+                 obs_path=None):
         self.input_path = input_path
+        self.input_obs_path = input_obs_path
+        self.input_obs_file = input_obs_path+'/'+input_obs_file
         self.write_past = False
         self.past_path = None
         self.write_future = False
         self.future_path = None
         self.write_metric_score = False
         self.metric_score_path = None
-        self.obs_path = None
         self.write_climate_signal = False
         self.climate_signal_path = None
+        self.write_obs = False
+        self.obs_path = None
         if past_path != None:
             self.write_past = True
             self.past_path = self.check_path(past_path)
@@ -119,12 +165,9 @@ class Options:
         if metric_score_path != None:
             self.write_metric_score = True
             self.metric_score_path = self.check_path(metric_score_path)
-            if obs_path == None:
-                print("Error: --metric-score requires --obs-path argument")
-                sys.exit(1)
         if obs_path != None:
-            self.obs_path = self.check_path(obs_path,
-                                            trailing_slash=False)
+            self.write_obs = True
+            self.obs_path = self.check_path(obs_path)
         if climate_signal_path != None:
             self.write_climate_signal = True
             self.climate_signal_path = self.check_path(climate_signal_path)
@@ -137,15 +180,18 @@ class Options:
     def print(self):
         print("Options:")
         print("  input path =", self.input_path)
+        print("  input obs path =", self.input_obs_path)
+        print("  input obs file =", self.input_obs_file)
         print("  past write =", self.write_past,
               ", path =", self.past_path)
         print("  future write =", self.write_future,
               ", path =", self.future_path)
         print("  metric score write =", self.write_metric_score,
               ", path =", self.metric_score_path)
-        print("  obs path =", self.obs_path)
         print("  climate signal write =", self.write_climate_signal,
               ", path =", self.climate_signal_path)
+        print("  obs write =", self.write_obs,
+              ", path =", self.obs_path)
 
 
 def create_comparison_combinations(comparison_paths):
@@ -193,27 +239,38 @@ def comparisons():
 def writeDatasetToZarr(output_path, dataset,
                        write_past=False, write_future=False,
                        write_climate_signal=False,
-                       write_metric_score=False):
+                       write_metric_score=False,
+                       write_obs=False):
     method = dataset.method
     model = dataset.model
 
+    print("Opening file(s):")
     if (write_climate_signal):
+        print("past:", dataset.past_path)
         ds_past = xr.open_dataset(dataset.past_path)
+        print("past:", dataset.future_path)
         ds_future = xr.open_dataset(dataset.future_path)
         ds = ds_future - ds_past
     elif (write_metric_score):
+        print("past:", dataset.past_path)
         ds_past = xr.open_dataset(dataset.past_path)
+        print("obs:", dataset.obs)
         ds_obs = xr.open_dataset(dataset.obs)
         ds = ds_obs
         for var in ds_obs.data_vars:
             ds[var] = abs(ds_past[var] - ds_obs[var])
     elif (write_past):
+        print('past:', dataset.past_path)
         ds = xr.open_dataset(dataset.past_path)
     elif (write_future):
+        print('future:', dataset.future_path)
         ds = xr.open_dataset(dataset.future_path)
+    elif (write_obs):
+        print('obs:', dataset.obs)
+        ds = xr.open_dataset(dataset.obs)
 
 
-    # variables for zarr creation
+    # variables for zarr creation, value has to be four characters
     new_dims = {#'time': 'time',
             'lat': 'y',
             'lon': 'x',
@@ -232,8 +289,11 @@ def writeDatasetToZarr(output_path, dataset,
             'jja_p':'jjap',
             'son_t':'sont',
             'son_p':'sonp',
+            'ann_t':'annt',
+            'ann_p':'annp',
+            'ann_snow':'anns',
+            'freezethaw':'fzth',
         }
-
 
     ds = ds.rename(new_dims)
     # print("ds after rename =", ds)
@@ -261,25 +321,35 @@ def writeDatasetToZarr(output_path, dataset,
     ds["climate"] = ds["climate"].astype("float32")
     ds["band"] = ds["band"].astype("str")
     ds.attrs.clear()
-    ds = convert_to_zarr_format(ds) # already in single precision
+    dz = convert_to_zarr_format(ds) # already in single precision
 
 
-    # setup write_path,
-    method_s = method.lower().replace('-','_')
-    model_s = model.lower().replace('-','_')
+    # setup write_path
+    if method != None:
+        method_s = method.lower().replace('-','_')
+    if model != None:
+        model_s = model.lower().replace('-','_')
     if (write_climate_signal):
         write_path = output_path + method_s + '/' + model_s + '/' + dataset.rcp
     if (write_metric_score):
         write_path = output_path + method_s + '/' + model_s + '/' + dataset.rcp
     elif (write_future):
-        write_path = output_path + method_s + '/' + model_s + '/' + dataset.rcp
+        write_path = output_path + method_s + '/' + model_s + '/' + \
+            future_time_slice_str + '/' + dataset.rcp
     elif (write_past):
-        write_path = output_path + method_s + '/' + model_s + '/' + time_slice_str
+        write_path = output_path + method_s + '/' + model_s + '/' + \
+            time_slice_str
+    elif (write_obs):
+        # write_obs_to_zarr(ds, ob.lower().replace('-','_'))
+        ob_filename = os.path.basename(dataset.obs).split(".ds")[0]
+        write_path = output_path + \
+            ob_filename.lower().replace('-','_') + '/' + \
+            time_slice_str
+        # print("Write ob to Zarr file", write_path)
 
-    print("DEBUGGING WRITE_PATH",write_path)
-    print(" output_path", output_path)
-    write_to_zarr(ds, write_path)
+    write_to_zarr(dz, write_path)
     print("small fin", 'output_path=',output_path)
+    sys.exit()
 
 
 
@@ -287,28 +357,37 @@ def handlePastFutureArgs(input_path, time_period):
     datasets = []
 
     if time_period == PAST:
-        rcps = ['']
+        rcps = ['.hist.1981-2004']
     elif time_period == FUTURE:
-        rcps = ['.rcp45', '.rcp85']
+        rcps = ['.rcp45', '.rcp85', '.rcp45.2076-2099', '.rcp85.2076-2099']
 
     for cm in climate_models:
         for dm in downscaling_methods:
             for rcp in rcps:
                 filepath = input_path+'/'+cm+'.'+dm+rcp+'.ds.conus.metric.maps.nc'
+                if cm == 'modelmean':
+                    filepath = input_path+'/'+dm+rcp+'.'+cm+'.ds.conus.metrics.nc'
+                # print('f=',filepath)
                 if (time_period == PAST and os.path.exists(filepath)):
                     datasets.append(Dataset(dm, cm, past=filepath, rcp=rcp[1:]))
                 elif (time_period == FUTURE and os.path.exists(filepath)):
-                    datasets.append(Dataset(dm, cm, future=filepath, rcp=rcp[1:]))
+                    datasets.append(Dataset(dm, cm, future=filepath,
+                                            rcp=rcp[1:]))
+                else:
+                    print("DIDN'T ADD f=", filepath)
     return datasets
 
-def handleMetricScoreArgs(input_path, obs_path):
+def handleMetricScoreArgs(input_path, metric_path):
     datasets = []
 
     for cm in climate_models:
         for dm in downscaling_methods:
-            past_path = input_path+'/'+cm+'.'+dm+'.ds.conus.metric.maps.nc'
-            if os.path.exists(past_path):
-                datasets.append(Dataset(dm, cm, past_path, obs=obs_path))
+            metric_path = input_path+'/'+cm+'.'+dm+'.ds.conus.metrics.nc'
+            if os.path.exists(metric_path):
+                # datasets.append(Dataset(dm, cm, past_path, obs=obs_path))
+                datasets.append(Dataset(dm, cm, metric=metric_path))
+            else:
+                print("metric path doesn't exist:", metric_path)
     return datasets
 
 def handleClimateSignalArgs(input_path):
@@ -320,111 +399,127 @@ def handleClimateSignalArgs(input_path):
             past_path = input_path+'/'+cm+'.'+dm+'.ds.conus.metric.maps.nc'
             for rcp in rcps:
                 future_path = input_path+'/'+cm+'.'+dm+'.'+rcp+'.ds.conus.metric.maps.nc'
+                # if ('GARD' in dm):
+                #     print(cm,"and",dm)
+                #     print("past_path :", past_path)
+                #     print("future_path :", future_path)
+
                 if os.path.exists(past_path) and os.path.exists(future_path):
+                    # if ('GARD' in dm):
+                    #     print('exists for', rcp)
                     datasets.append(Dataset(dm, cm, past_path, future_path, rcp=rcp))
+    # print('fin')
+    # sys.exit()
     return datasets
 
 
 
-def handleObsArgs(observations):
-    path = sys.argv[1]
-    paths = []
-    for ob in observations:
-        filepath = path+'/'+ob+'.ds.conus.metric.maps.nc'
-        paths.append(filepath)
-    return paths
+def handleObsArgs(input_obs_path):
+    datasets = []
+    for ob in observation_datasets:
+        obs_path = input_obs_path+'/'+ob+'.ds.conus.metric.maps.nc'
+        if os.path.exists(obs_path):
+                datasets.append(Dataset(obs=obs_path))
+    return datasets
 
-def process_obs():
-    print("--- Starting Zarr Data Maps Setup ---")
-    library_check()
-    paths = handleObsArgs(observation_datasets)
+# def writeObsToZarr(dataset, output_obs_path):
+#     # print("--- Starting Zarr Data Maps Setup ---")
+#     # library_check()
+#     # paths = handleObsArgs(input_obs_path) OLD  ONE NEED
 
-    print(paths)
-    for i,path in enumerate(paths):
-        # print(path)
-        if not os.path.exists(path):
-            print("does not exist:", path)
-            continue
-        ob = observation_datasets[i]
-        print(i, ":CHECK: ",ob.lower().replace('-','_'))
-        ds = xr.open_dataset(path)
+#     dataset.print()
+#     # sys.exit()
 
-        # for a in ds.variables.keys():
-        #     print(a)
-        # sys.exit()
+#     ob = dataset.obs
+#     ds = xr.open_dataset(ob)
 
-        # rename dimensions
-        # 'lat_y': y_name,
-        # 'lon_x': x_name,
-        new_dims = {#'time': 'time',
-                    'lat': 'y',
-                    'lon': 'x',
-                    'n34pr':'n34p',
-                    'ttrend':'ttre',
-                    'ptrend':'ptre',
-                    'pr90':'pr90',
-                    'pr99':'pr99',
-                    't90':'t90_',
-                    't99':'t99_',
-                    'djf_t':'djft',
-                    'djf_p':'djfp',
-                    'mam_t':'mamt',
-                    'mam_p':'mamp',
-                    'jja_t':'jjat',
-                    'jja_p':'jjap',
-                    'son_t':'sont',
-                    'son_p':'sonp',
-        }
-        ds = ds.rename(new_dims)
-        variables = list(ds.variables.keys())
-        variables = [var for var in variables if var not in ['x', 'y']]
-        # print(variables)
-        # sys.exit()
-        # don't need to average and handle time dimension
-        # - [ ] do i need to handle time?
-        # don't need to drop extra dimensions
-        # add climate dimension
-        # add climate (aka variable) dimension
-        print(" - add climate (aka variable) dimension")
-        # variables = ['prec', 'tavg']
-        fixed_length = 4
-        concatenated_vars = []
-        for var_name in variables:
-            concatenated_vars.append(ds[var_name])
-        ds['climate'] = xr.concat(concatenated_vars, dim='band')
-        var_names_U4 = [s[:fixed_length].ljust(fixed_length) for s in variables]
-        ds = ds.assign_coords(band=var_names_U4)
-        ds = ds.drop_vars(set(ds.data_vars) - set(['climate']))
-        # --- clean up types
-        print(" - clean up types")
-        # month to int type
-        ds['month'] = xr.Variable(dims=('month',),
-                           data=list(range(1, 12 + 1)))
-                           # data=list(range(1, ds.month.shape[0] + 1)))
-                           # attrs={'dtype': 'int32'})
-        ds["month"] = ds["month"].astype("int32")
-        ds["climate"] = ds["climate"].astype("float32")
-        ds["band"] = ds["band"].astype("str")
-        ds.attrs.clear()
-        ds = convert_to_zarr_format(ds) # already in single precision
+#     # for a in ds.variables.keys():
+#     #     print(a)
+#     # sys.exit()
 
-        write_obs_to_zarr(ds, ob.lower().replace('-','_'))
+#     # rename dimensions
+#     # 'lat_y': y_name,
+#     # 'lon_x': x_name,
+#     new_dims = {#'time': 'time',
+#                 'lat': 'y',
+#                 'lon': 'x',
+#                 'n34pr':'n34p',
+#                 'ttrend':'ttre',
+#                 'ptrend':'ptre',
+#                 'pr90':'pr90',
+#                 'pr99':'pr99',
+#                 't90':'t90_',
+#                 't99':'t99_',
+#                 'djf_t':'djft',
+#                 'djf_p':'djfp',
+#                 'mam_t':'mamt',
+#                 'mam_p':'mamp',
+#                 'jja_t':'jjat',
+#                 'jja_p':'jjap',
+#                 'son_t':'sont',
+#                 'son_p':'sonp',
+#     }
+#     ds = ds.rename(new_dims)
+#     variables = list(ds.variables.keys())
+#     variables = [var for var in variables if var not in ['x', 'y']]
+#     # print(variables)
+#     # sys.exit()
+#     # don't need to average and handle time dimension
+#     # - [ ] do i need to handle time?
+#     # don't need to drop extra dimensions
+#     # add climate dimension
+#     # add climate (aka variable) dimension
+#     print(" - add climate (aka variable) dimension")
+#     # variables = ['prec', 'tavg']
+#     fixed_length = 4
+#     concatenated_vars = []
+#     for var_name in variables:
+#         concatenated_vars.append(ds[var_name])
+#     ds['climate'] = xr.concat(concatenated_vars, dim='band')
+#     var_names_U4 = [s[:fixed_length].ljust(fixed_length) for s in variables]
+#     ds = ds.assign_coords(band=var_names_U4)
+#     ds = ds.drop_vars(set(ds.data_vars) - set(['climate']))
+#     # --- clean up types
+#     print(" - clean up types")
+#     # month to int type
+#     ds['month'] = xr.Variable(dims=('month',),
+#                               data=list(range(1, 12 + 1)))
+#                            # data=list(range(1, ds.month.shape[0] + 1)))
+#                            # attrs={'dtype': 'int32'})
+#     ds["month"] = ds["month"].astype("int32")
+#     ds["climate"] = ds["climate"].astype("float32")
+#     ds["band"] = ds["band"].astype("str")
+#     ds.attrs.clear()
+#     ds = convert_to_zarr_format(ds) # already in single precision
 
-        print(ds)
-        # sys.exit()
+#     # write_obs_to_zarr(ds, ob.lower().replace('-','_'))
+#     ob_filename = os.path.basename(ob).split(".ds")[0]
+#     print("Writing ob to zarr format")
+#     save_path = output_obs_path + \
+#                 ob_filename.lower().replace('-','_') + '/' + \
+#                 time_slice_str
+#     save_f = save_path + '/data.zarr'
+#     print("Write ob to Zarr file", save_f)
+#     # sys.exit()
+#     ds.to_zarr(save_f, consolidated=True)
 
-    print('---fin---')
-    sys.exit()
+#     # print(ds)
+#     # sys.exit()
+
+#     # print('---fin---')
+#     # sys.exit()
 
 
 # parse command line arguments
 def parseCLA():
     # define argument parser
     parser = argparse.ArgumentParser(description="Create Zarr files for ICAR Maps.")
-    parser.add_argument("input_path", help="Input file")
+    parser.add_argument("input_path", help="Path to input files")
+    parser.add_argument("input_obs_path", help="Path to input observations")
+    parser.add_argument("input_obs_file", help="Path to input observations")
     parser.add_argument("-v", "--verbose", action="store_true",
                         help="Enable verbose mode")
-    group = parser.add_argument_group('Output Data', 'types of output and path to  write to')
+    group = parser.add_argument_group('Output Data', 'types of output and path to write to')
     group.add_argument("--past", nargs=1, dest="past_path",
                        help="Write past model data to passed path")
     group.add_argument("--future", nargs=1, dest="future_path",
@@ -433,8 +528,8 @@ def parseCLA():
                        help="Write (model_data - obs_data) dataset")
     group.add_argument("--climate-signal", nargs=1, dest="climate_signal_path",
                        help="Write climate signal data to passed path")
-    group.add_argument("--obs-path", nargs=1, dest="obs_path",
-                       help="Path to observation dataset")
+    group.add_argument("--obs", nargs=1, dest="obs_path",
+                       help="Write observation dataset to passed path")
 
 
     # Parse the arguments
@@ -443,12 +538,14 @@ def parseCLA():
     if (args.past_path == None and
         args.future_path == None and
         args.metric_score_path == None and
-        args.climate_signal_path == None):
+        args.climate_signal_path == None and
+        args.obs_path == None):
         print("ERROR: past, future, metric-score, or climate-signal options are required")
         print(parser.print_help())
         sys.exit(1)
 
-    options = Options(args.input_path, args.past_path, args.future_path,
+    options = Options(args.input_path, args.input_obs_path, args.input_obs_file,
+                      args.past_path, args.future_path,
                       args.metric_score_path, args.climate_signal_path,
                       args.obs_path)
 
@@ -467,72 +564,85 @@ def main():
     # paths, method, model = handleArgs.get_arguments(downscaling_methods, climate_models)
     # paths, methods, models = new_handleArgs(input_path, time_period)
     options.print()
-    print('---')
 
+    print('---')
     past_datasets = []
     future_datasets = []
     metric_score_datasets = []
     climate_signal_datasets = []
+    obs_datasets = []
     if options.write_past:
         past_datasets = handlePastFutureArgs(options.input_path, PAST)
     if options.write_future:
         future_datasets = handlePastFutureArgs(options.input_path, FUTURE)
     if options.write_metric_score:
-        metric_score_datasets = handleMetricScoreArgs(options.input_path, options.obs_path)
+        metric_score_datasets = handleMetricScoreArgs(options.input_path,
+                                                      options.metric_score_path)
+        print("metric score datasets", metric_score_datasets)
+        sys.exit()
     if options.write_climate_signal:
         climate_signal_datasets = handleClimateSignalArgs(options.input_path)
+    if options.write_obs:
+        obs_datasets = handleObsArgs(options.input_obs_path)
+
+
+    # options.print()
+    # sys.exit()
 
     # --- process datasets to write to zarr
     count = 0
+    max_count=999999
+
+    print("msds", metric_score_datasets)
+
     for dataset in metric_score_datasets:
         count+=1
         options.print()
         dataset.print()
-        print('----')
-        print(options.metric_score_path, dataset)
-        # sys.exit()
+        # question is how to order the datasets now?
         writeDatasetToZarr(options.metric_score_path, dataset,
                            write_metric_score = True)
-        # if (count == 1):
-        #     break
+        if (count > max_count):
+            print(max_count, "max count reached")
+            break
 
     for dataset in climate_signal_datasets:
+        print("Attempting to write ds to zarr for climate signal")
         count+=1
         writeDatasetToZarr(options.climate_signal_path, dataset,
                            write_climate_signal = True)
-        # if (count == 1):
-        #     break
+        if (count > max_count):
+            print(max_count, "max count reached")
+            break
 
     for dataset in future_datasets:
         count+=1
         writeDatasetToZarr(options.future_path, dataset,
                            write_future = True)
-        # if (count == 2):
-        #     break
+        if (count > max_count):
+            print(max_count, "max count reached")
+            break
 
     for dataset in past_datasets:
         count+=1
         writeDatasetToZarr(options.past_path, dataset,
                            write_past = True)
-        # if (count == 3):
-        #     break
+        if (count > max_count):
+            print(max_count, "max count reached")
+            break
+
+    for dataset in obs_datasets:
+        count+=1
+        writeDatasetToZarr(options.obs_path, dataset,
+                           write_obs = True)
+        if (count > max_count):
+            print(max_count, "max count reached")
+            break
+
+
 
 
     print('---fin---')
-    sys.exit()
-    ds = open_data_srcs(paths)
-    print("Opened", method, "downscaling method and", model, "climate model")
-
-    ds = rename_dimensions(ds, method, model)
-    ds = average_and_handle_time_dimension(ds)
-
-    ds = drop_extra_dimensions(ds)
-    ds = add_climate_dimension(ds)
-
-    ds = convert_to_zarr_format(ds) # already in single precision
-    write_to_zarr(ds, method, model)
-
-    print('fin')
     sys.exit()
 
 
@@ -776,14 +886,6 @@ def handle_time_dimension(ds):
 
     return ds
 
-def write_obs_to_zarr(ds, ob):
-    print("Writing ob to zarr format")
-    save_path = f'data/obs256/' + ob + '/' + time_slice_str
-    save_f = save_path + '/data.zarr'
-    print("Write ob to Zarr file", save_f)
-    ds.to_zarr(save_f, consolidated=True)
-
-
 def write_to_zarr(ds, output_path, zarr_file='data.zarr'):
     print("Writing to zarr format")
 
@@ -812,7 +914,8 @@ def write_to_zarr(ds, output_path, zarr_file='data.zarr'):
     # write the pyramid to zarr, defaults to zarr_version 2
     # consolidated=True, metadata files will have the information expected by site
     # dt = convert_to_zarr_format(ds)
-    ds.to_zarr(save_f, consolidated=True)
+    ds.to_zarr(save_f, consolidated=True) #, encoding={"zlib":True})
+    print("Done writing to zarr format")
 
 
 def convert_to_zarr_format(ds):
@@ -824,45 +927,103 @@ def convert_to_zarr_format(ds):
     print("ds3 =", ds)
 
 
+    # write CRS data in Climate and Forecast (CF) Metadata Convention style
     ds.rio.write_crs('EPSG:4326', inplace=True)
 
     fillValue = 3.4028234663852886e38 # end result red everywhere, inf in np array??
     # fillValue = 9.969209968386869e36 # end result is? NORMAL??
     ds = ds.fillna(fillValue)
+
+    # return ds
+
+
+
     # print(ds)
     # sys.exit()
+    # us_grid = xr.Dataset({
+    #     'lat': (['lat'], ds['y'].values),
+    #     'lon': (['lon'], ds['x'].values)
+    # })
+    # regridder = xe.Regridder(us_grid,
+    #                          world_grid,
+    #                          method='conservative',)
+    #                          # extrap_method='nearest_s2d')
+    #                          # extrap_method='ESMF_EXTRAPMETHOD_NONE')
+
+    # ds = ds.rename({'x':'lon', 'y':'lat'})
+    # ds = regridder(ds)
+    # ds = ds.rename({'lon':'x', 'lat':'y'})
+
+    # def sel_coarsen(ds, factor, dims, **kwargs):
+    #     return ds.sel(**{dim: slice(None, None, factor) for dim in dims})
+    # dt = ndp.pyramid_create(ds,
+    #                         # factors=[8,4,2,1],
+    #                         factors=[1],
+    #                         dims=['x','y'],
+    #                         func=sel_coarsen,
+    #                          # boundary='trim',
+    #                          )
 
 
-    # print("debugging 1: pyramid_coarsen instead of reproject")
+    # # # # print("debugging 1: pyramid_coarsen instead of reproject")
     # dt = ndp.pyramid_coarsen(ds,
     #                          # factors=[8,4,2,1],
-    #                          factors=[2,1],
+    #                          factors=[1],
     #                          dims=['x','y'],
     #                          # boundary='trim',
     #                          )
+    # # this is needed to get zlib compression, required by mapping js app
+    # dt = ndp.utils.add_metadata_and_zarr_encoding(dt,
+    #                                               levels=1,)
+    #                                               # # levels=LEVELS,
+    #                                               # pixels_per_tile=PIXELS_PER_TILE)
+
+
     # print("ds4 =", ds)
 
     # HAVE BEEN USING THIS ONE!
 #     dt = ndp.pyramid_reproject(ds,
-#                                levels=2,
+#                                levels=1,
 #                                # pixels_per_tile=1024,   # 256 mb
-#                                # pixels_per_tile=2048, # 1 gb
+#                                # pixels_per_tile=1024,   # 256 mb
+#                                pixels_per_tile=2048, # 1 gb
 #                                # pixels_per_tile=4096, # 4 gb, 13 minutes?
 # # Data variables:
 # # climate (band, y, x) float32 4GB dask.array<chunksize=(16, 4096, 4096), meta=np.ndarray>
+
+
+
 #                                # pixels_per_tile=8192, # 16 gb?
-
-
-
 #                                extra_dim='band')
+#---- FOO THIS IS ORIGINAL, WHAT I"VE BEEN USING TIL MID 08.2024
+
+    # Pad the dataset with zeros to prevent unwanted interpolation artifacts
+    pad_width = 3  # Adjust padding as needed
+    # print("--PADDED--")
+    # ds_padded = ds.pad(x=pad_width, y=pad_width, constant_values=0)
+   # print(ds_padded)
+    pixels = 512
+    pixels = 13875 / 4
+    pixels = 3469
+    pixels = 2880 # for equidistant-cylindrical
+    pixels = 1440 # test
+    pixels = 720 # test
+    pixels = 360 # test, this reaches 2880 for level 4
+
     dt = ndp.pyramid_reproject(ds,
-                               levels=2,
+    # dt = ndp.pyramid_reproject(ds_padded,
+                               levels=LEVELS,
+                               pixels_per_tile=pixels,
+                               projection='equidistant-cylindrical',
                                # pixels_per_tile=PIXELS_PER_TILE,
                                extra_dim='band')
                                # levels=1, # THIS DIDN'D DO MUCH AT ALL
+    # print("_______ printing dt _______")
+    # print(dt)
+    # sys.exit()
+
+#---- 08.2024
     # dt = dt.rename({'x':'lon', 'y':'lat'})
-    print("_______")
-    print(dt)
     # print(dt.attrs)
     # print("- - -")
     # print(ds)
@@ -880,26 +1041,43 @@ def convert_to_zarr_format(ds):
     # # print(ds_out)
 
 
-    # print("==== Regridding ====")
+   #  print("==== Regridding ====")
 
-    # ds = ds.rename({'x':'lon', 'y':'lat'})
-    # print(ds)
-    # dt = ndp.pyramid_regrid(ds,
-    #                         levels=1,
-    #                         pixels_per_tile=256, # 360 * 8, 22.5*128
-    #                         regridder_apply_kws={'skipna':True}
-    #                         # pixels_per_tile=2944 # 23*128
-    #                         # pixels_per_tile=256 # 23*128
-    #                         )
+   #  # fixes ValueError: dataset must include lon/lat or be CF-compliant
+   #  ds = ds.rename({'x':'lon', 'y':'lat'})
+   #  # print(ds)
+   #  dt = ndp.pyramid_regrid(ds,
+   #                          levels=1,
+   #                          # regridder_apply_kws={'skipna':True},
+   # # extra_dim='band', DOESNT WORK ON PYRAMID REGRID JUST REPROJECT
+   #                          # method options
+   #                          method='conservative',
+   #                          # regridder_apply_kws={
+   #                          #     'extrap_method':'ESMF_EXTRAPMETHOD_NONE'},
+   #                          # method='nearest_d2s', # best so far
+   #                          # method='bilinear',
+   #                          # method='patch',
+   #                          # pixels_per_tile=256, # 360 * 8, 22.5*128
+   #                          # pixels_per_tile=2944 # 23*128
+   #                          # pixels_per_tile=256,
+   #                          # pixels_per_tile=512,
+   #                          # pixels_per_tile=1024, # this one if have to
+   #                          pixels_per_tile=2048, # THIS TAKES FOREVER
+   #                          )
+   #  # going back to what carbonplan's map needs
+   #  ds = ds.rename({'lon':'x', 'lat':'y'})
     # print(dt.attrs)
     # print("fine")
+
+    # print("_______")
+    # print(dt)
     # sys.exit()
 
 
 
     # print("debugging 2")
     # dt = ndp.utils.add_metadata_and_zarr_encoding(dt,
-    #                                               levels=2,
+    #                                               levels=1,
     #                                               # levels=LEVELS,
     #                                               pixels_per_tile=PIXELS_PER_TILE)
     print("Done Creating Pyramid")
