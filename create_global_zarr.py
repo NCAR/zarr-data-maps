@@ -53,7 +53,6 @@ observation_datasets_test = ['global', 'Midwest', 'Northeast',
                              'NorthernGreatPlains', 'Northwest', 'Southeast',
                              'SouthernGreatPlains', 'Southwest']
 
-
 debug=False
 if (debug):
     downscaling_methods = ['ICAR']
@@ -254,6 +253,9 @@ def writeDatasetToZarr(output_path, dataset,
         print('obs:', dataset.obs)
         ds = xr.open_dataset(dataset.obs)
 
+    print("foo")
+    print(ds)
+    sys.exit()
 
     # variables for zarr creation, value has to be four characters
     new_dims = {#'time': 'time',
@@ -398,119 +400,30 @@ def handleClimateSignalArgs(input_path):
     return datasets
 
 
-def findObservationDatasets(obs_path):
-    files = glob.glob(obs_path+"/obs.*.metrics.nc")
+def findObservationDatasets(obs_path, suffix):
+    datasets = []
+    files = glob.glob(obs_path+"/obs.*"+suffix)
     for f in files:
         base = os.path.basename(f)   # e.g., obs.ABCD.metrics.nc
         # Extract the dataset name between 'obs.' and '.metrics.nc'
-        if base.startswith("obs.") and base.endswith(".metrics.nc"):
-            dataset_name = base[len("obs."):-len(".metrics.nc")]
-            observation_datasets.append(dataset_name)
+        if base.startswith("obs.") and base.endswith(suffix):
+            dataset_name = base[len("obs."):-len(suffix)]
+            datasets.append(dataset_name)
     global test
     if (test):
-        check_arrays(observation_datasets_test, observation_datasets,
+        check_arrays(observation_datasets_test, datasets,
                      'observational datasets')
-    sys.exit()
+    return datasets
 
-def handleObsArgs(input_obs_path):
+def handleObsArgs(input_obs_path, suffix):
     datasets = []
-    findObservationDatasets(input_obs_path)
-    print(observation_datasets)
-    sys.exit()
-    for ob in observation_datasets:
-        obs_path = input_obs_path+'/'+ob+'.ds.conus.metric.maps.nc'
+    obs_datasets = findObservationDatasets(input_obs_path, suffix)
+    for ob in obs_datasets:
+        obs_path = input_obs_path+'/obs.'+ob+'.metric.maps.nc'
         if os.path.exists(obs_path):
                 datasets.append(Dataset(obs=obs_path))
 
     return datasets
-
-# def writeObsToZarr(dataset, output_obs_path):
-#     # print("--- Starting Zarr Data Maps Setup ---")
-#     # library_check()
-#     # paths = handleObsArgs(input_obs_path) OLD  ONE NEED
-
-#     dataset.print()
-#     # sys.exit()
-
-#     ob = dataset.obs
-#     ds = xr.open_dataset(ob)
-
-#     # for a in ds.variables.keys():
-#     #     print(a)
-#     # sys.exit()
-
-#     # rename dimensions
-#     # 'lat_y': y_name,
-#     # 'lon_x': x_name,
-#     new_dims = {#'time': 'time',
-#                 'lat': 'y',
-#                 'lon': 'x',
-#                 'n34pr':'n34p',
-#                 'ttrend':'ttre',
-#                 'ptrend':'ptre',
-#                 'pr90':'pr90',
-#                 'pr99':'pr99',
-#                 't90':'t90_',
-#                 't99':'t99_',
-#                 'djf_t':'djft',
-#                 'djf_p':'djfp',
-#                 'mam_t':'mamt',
-#                 'mam_p':'mamp',
-#                 'jja_t':'jjat',
-#                 'jja_p':'jjap',
-#                 'son_t':'sont',
-#                 'son_p':'sonp',
-#     }
-#     ds = ds.rename(new_dims)
-#     variables = list(ds.variables.keys())
-#     variables = [var for var in variables if var not in ['x', 'y']]
-#     # print(variables)
-#     # sys.exit()
-#     # don't need to average and handle time dimension
-#     # - [ ] do i need to handle time?
-#     # don't need to drop extra dimensions
-#     # add climate dimension
-#     # add climate (aka variable) dimension
-#     print(" - add climate (aka variable) dimension")
-#     # variables = ['prec', 'tavg']
-#     fixed_length = 4
-#     concatenated_vars = []
-#     for var_name in variables:
-#         concatenated_vars.append(ds[var_name])
-#     ds['climate'] = xr.concat(concatenated_vars, dim='band')
-#     var_names_U4 = [s[:fixed_length].ljust(fixed_length) for s in variables]
-#     ds = ds.assign_coords(band=var_names_U4)
-#     ds = ds.drop_vars(set(ds.data_vars) - set(['climate']))
-#     # --- clean up types
-#     print(" - clean up types")
-#     # month to int type
-#     ds['month'] = xr.Variable(dims=('month',),
-#                               data=list(range(1, 12 + 1)))
-#                            # data=list(range(1, ds.month.shape[0] + 1)))
-#                            # attrs={'dtype': 'int32'})
-#     ds["month"] = ds["month"].astype("int32")
-#     ds["climate"] = ds["climate"].astype("float32")
-#     ds["band"] = ds["band"].astype("str")
-#     ds.attrs.clear()
-#     ds = convert_to_zarr_format(ds) # already in single precision
-
-#     # write_obs_to_zarr(ds, ob.lower().replace('-','_'))
-#     ob_filename = os.path.basename(ob).split(".ds")[0]
-#     print("Writing ob to zarr format")
-#     save_path = output_obs_path + \
-#                 ob_filename.lower().replace('-','_') + '/' + \
-#                 time_slice_str
-#     save_f = save_path + '/data.zarr'
-#     print("Write ob to Zarr file", save_f)
-#     # sys.exit()
-#     ds.to_zarr(save_f, consolidated=True)
-
-#     # print(ds)
-#     # sys.exit()
-
-#     # print('---fin---')
-#     # sys.exit()
-
 
 # parse command line arguments
 def parseCLA():
@@ -585,11 +498,12 @@ def main():
     if options.write_climate_signal:
         climate_signal_datasets = handleClimateSignalArgs(options.input_path)
     if options.write_obs:
-        obs_datasets = handleObsArgs(options.input_obs_path)
+        obs_maps_datasets = handleObsArgs(options.input_obs_path, '.metric.maps.nc')
+        obs_metrics_datasets = handleObsArgs(options.input_obs_path, '.metrics.nc')
 
 
     # options.print()
-    sys.exit()
+    # sys.exit()
 
     # --- process datasets to write to zarr
     count = 0
@@ -633,13 +547,21 @@ def main():
             print(max_count, "max count reached")
             break
 
-    for dataset in obs_datasets:
+    # write obs maps and metrics
+    for dataset in obs_maps_datasets:
         count+=1
         writeDatasetToZarr(options.obs_path, dataset,
                            write_obs = True)
         if (count > max_count):
             print(max_count, "max count reached")
             break
+    # for dataset in obs__metricsdatasets:
+    #     count+=1
+    #     writeDatasetToZarr(options.obs_path, dataset,
+    #                        write_obs = True)
+    #     if (count > max_count):
+    #         print(max_count, "max count reached")
+    #         break
 
 
 
@@ -647,278 +569,12 @@ def main():
     print('---fin---')
     sys.exit()
 
-
 # library check
 def library_check():
     # if ndp.__version__ != '0.1.0':
     #     print(f"Error: ndpyramid version {ndp.__version__} != required 0.1.0")
     #     sys.exit(0)
     return
-
-
-def open_data_srcs(data_srcs):
-    print("OPENING ", data_srcs)
-    if (len(data_srcs) == 1):
-        ds = xr.open_dataset(data_srcs[0])
-    else:
-        datasets = []
-        for f in data_srcs:
-            datasets.append(xr.open_dataset(f))
-        ds = xr.concat(datasets, dim='time')
-    return ds
-
-def rename_dimensions(ds, method, model):
-    new_dims = dimensionNames.get_dimension_name(method, model)
-    ds = ds.rename(new_dims)
-    return ds
-
-def drop_extra_dimensions(ds):
-    vars_to_keep = [time, 'y', 'x', 'prec', 'tavg']
-    vars_to_drop = [var for var in ds.variables if var not in vars_to_keep]
-    ds = ds.drop_vars(vars_to_drop)
-    return ds
-
-def average_and_handle_time_dimension(ds):
-    print("Creating spatial and monthly average")
-    print("   - if silent failure, run on interactive node")
-
-    # --- smaller time slice for testing
-    # print("REMOVE 1999-2001 TIME SLICE")
-    ds = ds.sel(time=time_slice)
-
-    ds_subset = ds[['tavg', 'prec']]
-    monthly_avg = ds_subset.resample(time='MS').mean(dim='time')
-    monthly_avg_across_years = monthly_avg.groupby('time.month').mean(dim='time')
-    return monthly_avg_across_years
-    # spatial_avg_precip = ds['prec'].mean(dim=['y', 'x'])
-    # spatial_avg_temp = ds['tavg'].mean(dim=['y', 'x'])
-    # monthly_avg_precip = spatial_avg_precip.resample(time='MS').mean(dim='time')
-    # monthly_avg_temp = spatial_avg_temp.resample(time='MS').mean(dim='time')
-    # avg_precip = ds.resample(time='MS').mean(dim='time')
-    # avg_temp = ds.resample(time='MS').mean(dim='time')
-
-
-    # ds = xr.Dataset({'prec': avg_precip,
-    #                  'tavg': avg_temp
-    # #                   # 't_min': monthly_min_temp,
-    # #                   # 't_max': monthly_max_temp
-    #               })
-
-    # return ds
-
-# def write_to_zarr(ds, method, model):
-#     print("ARTLESS CLEAN THIS UP!!")
-#     print("Writing to zarr format")
-#     save_path = f'data/chart/' + method + '/' + model
-#     prec_save_path = save_path + '/prec'
-#     tavg_save_path = save_path + '/tavg'
-
-#     print("  WARNING: NEED TO ADD LARGER TIME FRAME")
-#     # write precip
-#     z_prec = zarr.open(prec_save_path, mode='w', shape=len(ds.prec),
-#                   compressor=None, dtype=np.float32)
-#     z_prec[:] = ds.prec.data
-
-#     # write temp
-#     z_temp = zarr.open(tavg_save_path, mode='w', shape=len(ds.tavg),
-#                   compressor=None, dtype=np.float32)
-#     z_temp[:] = ds.tavg.data
-
-#     # write attributes
-#     # z_prec.attrs['TIME START'] = '1980'
-#     # z_temp.attrs['TIME START'] = '1970'
-
-
-
-# months = list(map(lambda d: d + 1, range(12)))
-# path = f"{input_path}/noresm_hist_exl_conv_2000_2005.nc"
-# print("Opening", path)
-# ds1 = xr.open_dataset(path, engine="netcdf4")
-
-# print("Selecting time frame")
-# ds1 = ds1.isel(time=slice(0, 12))
-
-# Read icar_out files
-# days = list(map(lambda d: d + 1, range(9,10)))
-# for i in days:
-#     path = f"{input_path}/icar_out_2000-{i:02g}-01_00-00-00.nc"  # tavg originally
-#     # FOO: may need band variable??
-#     ds = xr.open_dataset(path, engine="netcdf4")
-#     if ds1:
-#         ds1.append(ds)
-#     else:
-#         ds1 = ds
-# #   older code
-#    # .squeeze() #.reset_coords(["band"], drop=True)
-#     # ds = (
-#     #     xr.open_dataarray(path, engine="netcdf4") # this is dataset so open_dataset()
-#     #      .to_dataset(name="climate")
-#     #      .squeeze()
-#     #      .reset_coords(["band"], drop=True)
-#     # )
-
-
-
-# print("Transforming variables to match website")
-# # --- transform to dataset for website, test ---
-# # transform 2d lat lon dimension to 1d
-# lon_len = len(ds1.lat.shape)
-# if (lon_len == 1):
-#     pass
-# elif (lon_len == 2):
-#     ds1['lat'] = ds1.lat[:,0]
-#     ds1['lon'] = ds1.lon[0,:]
-# else:
-#     print("Not prepared to deal with lat/lon of dimension", lat_len)
-#     sys.exit(1)
-
-# # rename dimensions
-# ds1 = ds1.rename({'time':'month',
-#                   # 'lat_y':'y',
-#                   # 'lon_x':'x',
-#                   'lat':'y',
-#                   'lon':'x',
-#                   # 'precipitation':'prec',
-#                   'pcp':'prec',
-#                   # 'ta2m':'tavg'
-#                   't_mean':'tavg'
-#                   })
-
-def add_climate_dimension(ds):
-    # add climate (aka variable) dimension
-    print(" - add climate (aka variable) dimension")
-
-
-    variables = ['prec', 'tavg']
-    fixed_length = 4
-
-    # ds['climate'] = xr.concat([ds[var] for var in vars], dim='band')
-    ds['climate'] = xr.concat([ds[variables[0]], ds[variables[1]]], dim='band')
-    var_names_U4 = [s[:fixed_length].ljust(fixed_length) for s in variables]
-    ds = ds.assign_coords(band=var_names_U4)
-    # ds['climate'] = ds['climate'].assign_coords(band=[s[:fixed_length].ljust(fixed_length) for s in vars])
-
-    ds = ds.drop_vars(set(ds.data_vars) - set(['climate']))
-
-    # ds['climate'] = xr.concat([ds[var] for var in vars], dim='band')
-    # keep_vars = ['climate']
-    # ds = ds.drop_vars([var for var in ds.data_vars if var not in keep_vars])
-    # print(" - add band coordinates")
-    # band_var_names = ['prec','tavg']
-    # var_names_U4 = [s[:fixed_length].ljust(fixed_length) for s in band_var_names]
-    # ds = ds.assign_coords(band=var_names_U4)
-
-    # var1='prec'; var2='tavg'
-    # ds['climate'] = xr.concat([ds[var1], ds[var2]],
-    #                            dim='band')
-    # cleanup non-climate vars
-    # keep_vars = ['climate']
-    # all_vars = list(ds.data_vars)
-    # remove_vars = [var for var in all_vars if var not in keep_vars]
-    # ds = ds.drop_vars(remove_vars)
-
-    # # add band coordinates
-    # print(" - add band coordinates")
-    # band_var_names = ['prec','tavg']
-    # fixed_length = 4
-    # var_names_U4 = [s[:fixed_length].ljust(fixed_length) for s in band_var_names]
-    # ds = ds.assign_coords(band=var_names_U4)
-
-    # --- clean up types
-    print(" - clean up types")
-    # month to int type
-    ds['month'] = xr.Variable(dims=('month',),
-                           data=list(range(1, 12 + 1)))
-                           # data=list(range(1, ds.month.shape[0] + 1)))
-                           # attrs={'dtype': 'int32'})
-    ds["month"] = ds["month"].astype("int32")
-    ds["climate"] = ds["climate"].astype("float32")
-    ds["band"] = ds["band"].astype("str")
-    ds.attrs.clear()
-
-
-    # # --- force to be like their data
-    # print (" - force to be like their data[??]")
-    # ds = ds.where(ds.month<=12, drop=True)
-    return ds
-
-# sys.exit()
-
-def open_data_srcs(data_srcs):
-    print("OPENING ", data_srcs)
-    if (len(data_srcs) == 1):
-        ds = xr.open_dataset(data_srcs[0])
-    else:
-        datasets = []
-        for f in data_srcs:
-            datasets.append(xr.open_dataset(f))
-        ds = xr.concat(datasets, dim='time')
-    return ds
-
-def rename_dimensions(ds, method, model):
-    new_dims = dimensionNames.get_dimension_name(method, model)
-    ds = ds.rename(new_dims)
-    return ds
-
-def drop_extra_dimensions(ds):
-    print(ds)
-    vars_to_keep = [time, 'y', 'x', 'prec', 'tavg']
-    vars_to_drop = [var for var in ds.variables if var not in vars_to_keep]
-    ds = ds.drop_vars(vars_to_drop)
-    return ds
-
-def handle_time_dimension(ds):
-    print("Creating spatial and monthly average")
-    print("   - if silent failure, run on interactive node")
-
-    # --- smaller time slice for testing
-    # print("REMOVE 1999-2001 TIME SLICE")
-    # ds = ds.sel(time=slice("1999","2001"))
-
-    spatial_avg_precip = ds['prec'].mean(dim=['y', 'x'])
-    spatial_avg_temp = ds['tavg'].mean(dim=['y', 'x'])
-    monthly_avg_precip = spatial_avg_precip.resample(time='MS').mean(dim='time')
-    monthly_avg_temp = spatial_avg_temp.resample(time='MS').mean(dim='time')
-
-    ds = xr.Dataset({'prec': monthly_avg_precip,
-                     'tavg': monthly_avg_temp
-    #                   # 't_min': monthly_min_temp,
-    #                   # 't_max': monthly_max_temp
-                  })
-
-    return ds
-
-def write_to_zarr(ds, output_path, zarr_file='data.zarr'):
-    print("Writing to zarr format")
-
-    # print("  WARNING: NEED TO ADD LARGER TIME FRAME")
-    # --- this block from zarr charts
-    # # write precip
-    # z_prec = zarr.open(prec_save_path, mode='w', shape=len(ds.prec),
-    #               compressor=None, dtype=np.float32)
-    # z_prec[:] = ds.prec.data
-
-    # # write temp
-    # z_temp = zarr.open(tavg_save_path, mode='w', shape=len(ds.tavg),
-    #               compressor=None, dtype=np.float32)
-    # z_temp[:] = ds.tavg.data
-
-    # # write attributes
-    # z_prec.attrs['TIME START'] = '1980'
-    # z_temp.attrs['TIME START'] = '1970'
-
-    save_f = output_path + '/' + zarr_file
-    if (os.path.exists(save_f)):
-        print("ERROR WRITING ZARR FILE: path exists at", save_f)
-
-    print("Write to Zarr file", save_f)
-    # sys.exit()
-    # write the pyramid to zarr, defaults to zarr_version 2
-    # consolidated=True, metadata files will have the information expected by site
-    # dt = convert_to_zarr_format(ds)
-    ds.to_zarr(save_f, consolidated=True) #, encoding={"zlib":True})
-    print("Done writing to zarr format")
-
 
 def convert_to_zarr_format(ds):
     # --- create the pyramid
@@ -928,7 +584,6 @@ def convert_to_zarr_format(ds):
     #    MissingCRS: CRS not found. Please set the CRS with 'rio.write_crs()'
     print("ds3 =", ds)
 
-
     # write CRS data in Climate and Forecast (CF) Metadata Convention style
     ds.rio.write_crs('EPSG:4326', inplace=True)
 
@@ -936,74 +591,11 @@ def convert_to_zarr_format(ds):
     # fillValue = 9.969209968386869e36 # end result is? NORMAL??
     ds = ds.fillna(fillValue)
 
-    # return ds
-
-
-
-    # print(ds)
-    # sys.exit()
-    # us_grid = xr.Dataset({
-    #     'lat': (['lat'], ds['y'].values),
-    #     'lon': (['lon'], ds['x'].values)
-    # })
-    # regridder = xe.Regridder(us_grid,
-    #                          world_grid,
-    #                          method='conservative',)
-    #                          # extrap_method='nearest_s2d')
-    #                          # extrap_method='ESMF_EXTRAPMETHOD_NONE')
-
-    # ds = ds.rename({'x':'lon', 'y':'lat'})
-    # ds = regridder(ds)
-    # ds = ds.rename({'lon':'x', 'lat':'y'})
-
-    # def sel_coarsen(ds, factor, dims, **kwargs):
-    #     return ds.sel(**{dim: slice(None, None, factor) for dim in dims})
-    # dt = ndp.pyramid_create(ds,
-    #                         # factors=[8,4,2,1],
-    #                         factors=[1],
-    #                         dims=['x','y'],
-    #                         func=sel_coarsen,
-    #                          # boundary='trim',
-    #                          )
-
-
-    # # # # print("debugging 1: pyramid_coarsen instead of reproject")
-    # dt = ndp.pyramid_coarsen(ds,
-    #                          # factors=[8,4,2,1],
-    #                          factors=[1],
-    #                          dims=['x','y'],
-    #                          # boundary='trim',
-    #                          )
-    # # this is needed to get zlib compression, required by mapping js app
-    # dt = ndp.utils.add_metadata_and_zarr_encoding(dt,
-    #                                               levels=1,)
-    #                                               # # levels=LEVELS,
-    #                                               # pixels_per_tile=PIXELS_PER_TILE)
-
-
-    # print("ds4 =", ds)
-
-    # HAVE BEEN USING THIS ONE!
-#     dt = ndp.pyramid_reproject(ds,
-#                                levels=1,
-#                                # pixels_per_tile=1024,   # 256 mb
-#                                # pixels_per_tile=1024,   # 256 mb
-#                                pixels_per_tile=2048, # 1 gb
-#                                # pixels_per_tile=4096, # 4 gb, 13 minutes?
-# # Data variables:
-# # climate (band, y, x) float32 4GB dask.array<chunksize=(16, 4096, 4096), meta=np.ndarray>
-
-
-
-#                                # pixels_per_tile=8192, # 16 gb?
-#                                extra_dim='band')
-#---- FOO THIS IS ORIGINAL, WHAT I"VE BEEN USING TIL MID 08.2024
-
     # Pad the dataset with zeros to prevent unwanted interpolation artifacts
     pad_width = 3  # Adjust padding as needed
     # print("--PADDED--")
     # ds_padded = ds.pad(x=pad_width, y=pad_width, constant_values=0)
-   # print(ds_padded)
+    # print(ds_padded)
     pixels = 512
     pixels = 13875 / 4
     pixels = 3469
@@ -1020,68 +612,6 @@ def convert_to_zarr_format(ds):
                                # pixels_per_tile=PIXELS_PER_TILE,
                                extra_dim='band')
                                # levels=1, # THIS DIDN'D DO MUCH AT ALL
-    # print("_______ printing dt _______")
-    # print(dt)
-    # sys.exit()
-
-#---- 08.2024
-    # dt = dt.rename({'x':'lon', 'y':'lat'})
-    # print(dt.attrs)
-    # print("- - -")
-    # print(ds)
-    # sys.exit()
-
-    # print("---- Renaming ----")
-
-    # # ds_out = xr.Dataset(
-    # #     {
-    # #         "lat": ds.lat,
-    # #         "lon": ds.lon
-    # #     }
-    # # )
-
-    # # print(ds_out)
-
-
-   #  print("==== Regridding ====")
-
-   #  # fixes ValueError: dataset must include lon/lat or be CF-compliant
-   #  ds = ds.rename({'x':'lon', 'y':'lat'})
-   #  # print(ds)
-   #  dt = ndp.pyramid_regrid(ds,
-   #                          levels=1,
-   #                          # regridder_apply_kws={'skipna':True},
-   # # extra_dim='band', DOESNT WORK ON PYRAMID REGRID JUST REPROJECT
-   #                          # method options
-   #                          method='conservative',
-   #                          # regridder_apply_kws={
-   #                          #     'extrap_method':'ESMF_EXTRAPMETHOD_NONE'},
-   #                          # method='nearest_d2s', # best so far
-   #                          # method='bilinear',
-   #                          # method='patch',
-   #                          # pixels_per_tile=256, # 360 * 8, 22.5*128
-   #                          # pixels_per_tile=2944 # 23*128
-   #                          # pixels_per_tile=256,
-   #                          # pixels_per_tile=512,
-   #                          # pixels_per_tile=1024, # this one if have to
-   #                          pixels_per_tile=2048, # THIS TAKES FOREVER
-   #                          )
-   #  # going back to what carbonplan's map needs
-   #  ds = ds.rename({'lon':'x', 'lat':'y'})
-    # print(dt.attrs)
-    # print("fine")
-
-    # print("_______")
-    # print(dt)
-    # sys.exit()
-
-
-
-    # print("debugging 2")
-    # dt = ndp.utils.add_metadata_and_zarr_encoding(dt,
-    #                                               levels=1,
-    #                                               # levels=LEVELS,
-    #                                               pixels_per_tile=PIXELS_PER_TILE)
     print("Done Creating Pyramid")
     return dt
 
