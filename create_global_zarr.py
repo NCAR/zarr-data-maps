@@ -331,13 +331,11 @@ def writeDatasetToZarr(output_path, dataset,
     if (write_climate_signal):
         write_path = output_path + method_s + '/' + model_s + '/' + dataset.era
     if (write_metric_score):
-        write_path = output_path + method_s + '/' + model_s + '/' + dataset.era
-    elif (write_future):
-        write_path = output_path + method_s + '/' + model_s + '/' + \
-            future_time_slice_str + '/' + dataset.era
-    elif (write_past):
-        write_path = output_path + method_s + '/' + model_s + '/' + \
-            time_slice_str
+        write_path = output_path + dataset.region + '/' + method_s + '/' + \
+            model_s + '/' + dataset.era
+    elif (write_maps):
+        write_path = output_path + dataset.region + '/' + method_s + '/' + \
+            model_s + '/' + dataset.era
     elif (write_obs):
         # write_obs_to_zarr(ds, ob.lower().replace('-','_'))
         ob_filename = os.path.basename(dataset.obs).split(".ds")[0]
@@ -349,6 +347,15 @@ def writeDatasetToZarr(output_path, dataset,
     write_to_zarr(dz, write_path)
     print("small fin", 'output_path=',output_path)
     sys.exit()
+
+
+def write_to_zarr(ds, output_path, zarr_file='data.zarr'):
+    save_f = output_path + '/' + zarr_file
+    if (os.path.exists(save_f)):
+        print("ERROR WRITING ZARR FILE: path exists at", save_f)
+    print("Writing to Zarr file", save_f)
+    ds.to_zarr(save_f, consolidated=True) #, encoding={"zlib":True})
+    print("Done writing to zarr format")
 
 
 # MIROC5.ICAR.hist.1981-2004.ds.DesertSouthwest.metrics.nc
