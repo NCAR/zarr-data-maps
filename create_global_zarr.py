@@ -81,52 +81,38 @@ CLIMATE_SIGNAL=2
 
 
 class Dataset:
-    def __init__(self, method=None, model=None, past=None, future=None,
-                 metric=None, era='', obs=None, region=None):
-        if (past != None) and not os.path.exists(past):
-            print("ERROR: past path does not exist:", past)
+    def __init__(self, method, model, era, region, ds_type, file_path):
+        if not os.path.exists(file_path):
+            print("ERROR: file path does not exist:", file_path)
             sys.exit()
-        if (future != None) and not os.path.exists(future):
-            print("ERROR: future path does not exist:", future)
-            sys.exit()
-        if (obs != None) and not os.path.exists(obs):
-            print("ERROR: obs path does not exist:", obs)
-            sys.exit()
-        if (metric != None) and not os.path.exists(metric):
-            print("ERROR: metric path does not exist:", metric)
-            sys.exit()
-        self.past_path = past
-        self.future_path = future
-        self.metric_path = metric
         self.method = method
         self.model = model
         self.era = era
-        self.obs = obs
         self.region = region
+        self.ds_type = ds_type
+        self.file_path = file_path
     def print(self):
         print("Dataset:")
-        print("  past_path =", self.past_path)
-        print("  future_path =", self.future_path)
-        print("  metric_path =", self.metric_path)
+        print("  file_path =", self.file_path)
+        print("  ds_type =", self.ds_type)
         print("  method =", self.method)
         print("  model =", self.model)
-        print("  obs =", self.obs)
         print("  era =", self.era)
         print("  region =", self.region)
 
 
 class Options:
-    def __init__(self, input_path, input_obs_path, input_metrics_path,
-                 past_path=None, future_path=None,
-                 metric_score_path=None, climate_signal_path=None,
-                 obs_path=None, test_in=None):
-        self.input_path = input_path
+    def __init__(self, input_maps_path, input_obs_path, input_metrics_path,
+                 output_maps_path=None,
+                 metric_score_path=None,
+                 climate_signal_path=None,
+                 obs_path=None,
+                 test_in=None):
+        self.input_maps_path = input_maps_path
         self.input_obs_path = input_obs_path
         self.input_metrics_path = input_metrics_path
-        self.write_past = False
-        self.past_path = None
-        self.write_future = False
-        self.future_path = None
+        self.write_maps = False
+        self.output_maps_path = None
         self.write_metric_score = False
         self.metric_score_path = None
         self.write_climate_signal = False
@@ -134,12 +120,9 @@ class Options:
         self.write_obs = False
         self.obs_path = None
         self.test = False
-        if past_path != None:
-            self.write_past = True
-            self.past_path = self.check_path(past_path)
-        if future_path != None:
-            self.write_future = True
-            self.future_path = self.check_path(future_path)
+        if output_maps_path != None:
+            self.write_maps = True
+            self.output_maps_path = self.check_path(output_maps_path)
         if metric_score_path != None:
             self.write_metric_score = True
             self.metric_score_path = self.check_path(metric_score_path)
@@ -161,14 +144,13 @@ class Options:
         return path
     def print(self):
         print("Options:")
-        print("  input path =", self.input_path)
+        print("  input maps path =", self.input_maps_path)
         print("  input obs path =", self.input_obs_path)
-        print("  past write =", self.write_past,
-              ", path =", self.past_path)
-        print("  future write =", self.write_future,
-              ", path =", self.future_path)
+        print("  input metrics path =", self.input_metrics_path)
+        print("  maps write =", self.write_maps,
+              ", maps_output_path =", self.output_maps_path)
         print("  metric score write =", self.write_metric_score,
-              ", path =", self.metric_score_path)
+              ", metric_score_path =", self.metric_score_path)
         print("  climate signal write =", self.write_climate_signal,
               ", path =", self.climate_signal_path)
         print("  obs write =", self.write_obs,
@@ -226,7 +208,7 @@ def comparisons():
 
 
 def writeDatasetToZarr(output_path, dataset,
-                       write_past=False, write_future=False,
+                       write_maps=False,
                        write_climate_signal=False,
                        write_metric_score=False,
                        write_obs=False):
@@ -234,29 +216,31 @@ def writeDatasetToZarr(output_path, dataset,
     model = dataset.model
 
     print("Opening file(s):")
-    if (write_climate_signal):
-        print("past:", dataset.past_path)
-        ds_past = xr.open_dataset(dataset.past_path)
-        print("past:", dataset.future_path)
-        ds_future = xr.open_dataset(dataset.future_path)
-        ds = ds_future - ds_past
+    # if (write_climate_signal):
+    #     print("past:", dataset.past_path)
+    #     ds_past = xr.open_dataset(dataset.past_path)
+    #     print("past:", dataset.future_path)
+    #     ds_future = xr.open_dataset(dataset.future_path)
+    #     ds = ds_future - ds_past
+    # elif (write_metric_score):
+    #     print("past:", dataset.past_path)
+    #     ds_past = xr.open_dataset(dataset.past_path)
+    #     print("obs:", dataset.obs)
+    #     ds_obs = xr.open_dataset(dataset.obs)
+    #     ds = ds_obs
+    #     for var in ds_obs.data_vars:
+    #         ds[var] = abs(ds_past[var] - ds_obs[var])
+    if (write_maps):
+        print(f'writing map {dataset.file_path} to dir {output_path}')
     elif (write_metric_score):
-        print("past:", dataset.past_path)
-        ds_past = xr.open_dataset(dataset.past_path)
-        print("obs:", dataset.obs)
-        ds_obs = xr.open_dataset(dataset.obs)
-        ds = ds_obs
-        for var in ds_obs.data_vars:
-            ds[var] = abs(ds_past[var] - ds_obs[var])
-    elif (write_past):
-        print('past:', dataset.past_path)
-        ds = xr.open_dataset(dataset.past_path)
-    elif (write_future):
-        print('future:', dataset.future_path)
-        ds = xr.open_dataset(dataset.future_path)
-    elif (write_obs):
-        print('obs:', dataset.obs)
-        ds = xr.open_dataset(dataset.obs)
+        print(f'writing metric {dataset.file_path} to dir {output_path}')
+    # elif (write_obs):
+    #     print('writing obs to:', dataset.obs)
+    else:
+        print('Bad write choice')
+        sys.exit()
+
+    ds = xr.open_dataset(dataset.file_path)
 
     # variables for zarr creation, value has to be four characters
     new_vars = {#'time': 'time',
@@ -285,6 +269,10 @@ def writeDatasetToZarr(output_path, dataset,
         'ann_p':'annp',
         'ann_snow':'anns',
         'freezethaw':'fzth',
+        'tpcorr':'tpco',
+        'drought_1yr':'d1yr',
+        'drought_2yr':'d2yr',
+        'drought_5yr':'d5yr',
     }
 
     # lowercase dimension names
@@ -295,9 +283,10 @@ def writeDatasetToZarr(output_path, dataset,
     rename_vars = {v: v.replace("-", "_") for v in ds.data_vars if "-" in v}
     ds = ds.rename(rename_vars)
 
-    # filter vars
-    filtered_vars = {k: v for k, v in new_vars.items() if k in ds.data_vars}
-    ds = ds.rename(filtered_vars)
+    valid_rename_map = {k: v for k, v in new_vars.items()
+                        if k in ds.variables or k in ds.dims}
+    ds = ds.rename(valid_rename_map)
+
     print("---")
     print("ds")
     print(ds)
@@ -308,6 +297,7 @@ def writeDatasetToZarr(output_path, dataset,
     invalid_vars = [var for var in ds.data_vars if len(var) != fixed_length]
     if invalid_vars:
         print("Variables with names not 4 characters long:", invalid_vars)
+        sys.exit()
 
     # put in format for zarr
     variables = list(ds.variables.keys())
@@ -315,6 +305,7 @@ def writeDatasetToZarr(output_path, dataset,
     concatenated_vars = []
     for var_name in variables:
         concatenated_vars.append(ds[var_name])
+    print(ds)
     ds['climate'] = xr.concat(concatenated_vars, dim='band')
     var_names_U4 = [s[:fixed_length].ljust(fixed_length) for s in variables]
     ds = ds.assign_coords(band=var_names_U4)
@@ -331,11 +322,6 @@ def writeDatasetToZarr(output_path, dataset,
     ds["band"] = ds["band"].astype("str")
     ds.attrs.clear()
     dz = convert_to_zarr_format(ds) # already in single precision
-
-    print(ds)
-    print("==")
-    print(dz)
-    sys.exit()
 
     # setup write_path
     if method != None:
@@ -365,30 +351,43 @@ def writeDatasetToZarr(output_path, dataset,
     sys.exit()
 
 
-
-def handlePastFutureArgs(input_path, time_period):
+# MIROC5.ICAR.hist.1981-2004.ds.DesertSouthwest.metrics.nc
+# MIROC5.ICAR.hist.1981-2004.ds.conus.metric.maps.nc
+def findDatasets(input_path, suffix, ds_type):
     datasets = []
 
-    if time_period == PAST:
-        rcps = ['.hist.1981-2004']
-    elif time_period == FUTURE:
-        rcps = ['.rcp45', '.rcp85', '.rcp45.2076-2099', '.rcp85.2076-2099']
+    for filename in os.listdir(input_path):
+        if filename.endswith(suffix):
+            parts = filename.split(".")
+            if len(parts) >= 8:
+                # filename in format of
+                # [cm].[dm].[era].ds.[region].[suffix]
+                climate_model = parts[0]
+                downscaling_method = parts[1]
+                era = parts[2] + '.' + parts[3]
+                region = parts[5]
+                file_path = input_path + '/' + \
+                    climate_model + '.' + \
+                    downscaling_method + '.' + \
+                    era + '.' + \
+                    'ds.' + \
+                    region + \
+                    suffix
 
-    for cm in climate_models:
-        for dm in downscaling_methods:
-            for rcp in rcps:
-                filepath = input_path+'/'+cm+'.'+dm+rcp+'.ds.conus.metric.maps.nc'
-                if cm == 'modelmean':
-                    filepath = input_path+'/'+dm+rcp+'.'+cm+'.ds.conus.metrics.nc'
-                # print('f=',filepath)
-                if (time_period == PAST and os.path.exists(filepath)):
-                    datasets.append(Dataset(dm, cm, past=filepath, rcp=rcp[1:]))
-                elif (time_period == FUTURE and os.path.exists(filepath)):
-                    datasets.append(Dataset(dm, cm, future=filepath,
-                                            rcp=rcp[1:]))
+                if os.path.exists(file_path):
+                    ds = Dataset(downscaling_method,
+                                 climate_model,
+                                 era,
+                                 region,
+                                 ds_type,
+                                 file_path)
+                    datasets.append(ds)
                 else:
-                    print("DIDN'T ADD f=", filepath)
+                    print("Warning: file path doesn't exist:", file_path)
+                    print("Parsing failed, exiting...")
+                    sys.exit()
     return datasets
+
 
 # MIROC5.ICAR.hist.1981-2004.ds.DesertSouthwest.metrics.nc
 def findMetricScoreDatasets(input_path, suffix=".metrics.nc"):
@@ -473,20 +472,27 @@ def handleObsArgs(input_obs_path, suffix):
 
     return datasets
 
-# parse command line arguments
-def parseCLA():
+def checkCLA(args):
+    if (args.output_maps_path == None and
+        args.metric_score_path == None and
+        args.climate_signal_path == None and
+        args.obs_path == None):
+        print("ERROR: maps, metric-score, or climate-signal options are required")
+        print(parser.print_help())
+        sys.exit(1)
+
+
+def parseArgs():
     # define argument parser
     parser = argparse.ArgumentParser(description="Create Zarr files for ICAR Maps.")
-    parser.add_argument("input_path", help="Path to input files")
+    parser.add_argument("input_maps_path", help="Path to input map files")
     parser.add_argument("input_obs_path", help="Path to input observations")
     parser.add_argument("input_metrics_path", help="Path to input metrics")
     parser.add_argument("-v", "--verbose", action="store_true",
                         help="Enable verbose mode")
     group = parser.add_argument_group('Output Data', 'types of output and path to write to')
-    group.add_argument("--past", nargs=1, dest="past_path",
-                       help="Write past model data to passed path")
-    group.add_argument("--future", nargs=1, dest="future_path",
-                       help="Write future model data to passed path")
+    group.add_argument("--maps", nargs=1, dest="output_maps_path",
+                       help="Write modeled data to passed path")
     group.add_argument("--metric-score", nargs=1, dest="metric_score_path",
                        help="Write (model_data - obs_data) dataset")
     group.add_argument("--climate-signal", nargs=1, dest="climate_signal_path",
@@ -496,23 +502,22 @@ def parseCLA():
     parser.add_argument("--test", action="store_true",
                         help="Test inputs")
 
-    # Parse the arguments
-    args = parser.parse_args()
+    return parser.parse_args()
 
-    if (args.past_path == None and
-        args.future_path == None and
-        args.metric_score_path == None and
-        args.climate_signal_path == None and
-        args.obs_path == None):
-        print("ERROR: past, future, metric-score, or climate-signal options are required")
-        print(parser.print_help())
-        sys.exit(1)
 
-    options = Options(args.input_path, args.input_obs_path,
+# parse command line arguments
+def parseCLA():
+    args = parseArgs()
+    checkCLA(args)
+
+    options = Options(args.input_maps_path,
+                      args.input_obs_path,
                       args.input_metrics_path,
-                      args.past_path, args.future_path,
-                      args.metric_score_path, args.climate_signal_path,
-                      args.obs_path, args.test)
+                      args.output_maps_path,
+                      args.metric_score_path,
+                      args.climate_signal_path,
+                      args.obs_path,
+                      args.test)
 
     return options
 
@@ -532,21 +537,25 @@ def main():
     metric_score_datasets = []
     climate_signal_datasets = []
     obs_datasets = []
-    if options.write_past: # todo
-        past_datasets = handlePastFutureArgs(options.input_path, PAST)
-    if options.write_future: # todo
-        future_datasets = handlePastFutureArgs(options.input_path, FUTURE)
+    if options.write_maps: # todo
+        # future_datasets = handlePastFutureArgs(options.input_path, FUTURE)
+        maps_datasets = findDatasets(options.input_maps_path,
+                                     '.metric.maps.nc',
+                                     'maps')
     if options.write_metric_score: # complete
-        metric_score_datasets = findMetricScoreDatasets(
-            options.input_metrics_path)
-        # metric_score_datasets.write_
-    if options.write_climate_signal: # todo
-        climate_signal_datasets = handleClimateSignalArgs(options.input_path)
-    if options.write_obs: # todo
-        obs_maps_datasets = handleObsArgs(options.input_obs_path,
-                                          '.metric.maps.nc')
-        obs_metrics_datasets = handleObsArgs(options.input_obs_path,
-                                             '.metrics.nc')
+        metric_score_datasets = findDatasets(options.input_metrics_path,
+                                             '.metrics.nc',
+                                             'metrics')
+
+    # --- TO REFACTOR ---
+    #     # metric_score_datasets.write_
+    # if options.write_climate_signal: # todo
+    #     climate_signal_datasets = handleClimateSignalArgs(options.input_path)
+    # if options.write_obs: # todo
+    #     obs_maps_datasets = handleObsArgs(options.input_obs_path,
+    #                                       '.metric.maps.nc')
+    #     obs_metrics_datasets = handleObsArgs(options.input_obs_path,
+    #                                          '.metrics.nc')
 
 
     # options.print()
@@ -579,18 +588,18 @@ def main():
             print(max_count, "max count reached")
             break
 
-    for dataset in future_datasets:
-        count+=1
-        writeDatasetToZarr(options.future_path, dataset,
-                           write_future = True)
-        if (count > max_count):
-            print(max_count, "max count reached")
-            break
+    # for dataset in future_datasets:
+    #     count+=1
+    #     writeDatasetToZarr(options.future_path, dataset,
+    #                        write_future = True)
+    #     if (count > max_count):
+    #         print(max_count, "max count reached")
+    #         break
 
-    for dataset in past_datasets:
+    for dataset in maps_datasets:
         count+=1
-        writeDatasetToZarr(options.past_path, dataset,
-                           write_past = True)
+        writeDatasetToZarr(options.output_maps_path, dataset,
+                           write_maps = True)
         if (count > max_count):
             print(max_count, "max count reached")
             break
