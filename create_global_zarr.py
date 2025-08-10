@@ -59,21 +59,9 @@ if (debug):
     climate_models = ['ACCESS1-3']
     observation_datasets = ['global']
 
-
 # set these somewhere else?
 VERSION = 2
 time = 'time'
-# time_slices=[slice("1980","2010"), slice("2070","2100")]
-# time_slice_strs=['1980_2010', '2070_2100']
-# time_slice=slice("1980","2010")
-# time_slice_str='1980_2010'
-future_time_slice=slice("2070","2100")
-future_time_slice_str='2070_2100'
-
-# testing new
-time_slice_str='1980_2010'
-
-time_slice_str='1981_2004'
 
 PAST=0
 FUTURE=1
@@ -81,10 +69,12 @@ CLIMATE_SIGNAL=2
 
 
 class Dataset:
-    def __init__(self, method, model, era, region, ds_type, file_path):
+    def __init__(self, file_path, ds_type, era, region,
+                 method=None, model=None, obs=None):
         if not os.path.exists(file_path):
             print("ERROR: file path does not exist:", file_path)
             sys.exit()
+        self.obs = obs
         self.method = method
         self.model = model
         self.era = era
@@ -95,10 +85,12 @@ class Dataset:
         print("Dataset:")
         print("  file_path =", self.file_path)
         print("  ds_type =", self.ds_type)
-        print("  method =", self.method)
-        print("  model =", self.model)
         print("  era =", self.era)
         print("  region =", self.region)
+        print("  method =", self.method)
+        print("  model =", self.model)
+        print("  obs =", self.obs)
+
 
 
 class Options:
@@ -106,7 +98,7 @@ class Options:
                  output_maps_path=None,
                  metric_score_path=None,
                  climate_signal_path=None,
-                 obs_path=None,
+                 output_obs_path=None,
                  test_in=None):
         self.input_maps_path = input_maps_path
         self.input_obs_path = input_obs_path
@@ -118,7 +110,7 @@ class Options:
         self.write_climate_signal = False
         self.climate_signal_path = None
         self.write_obs = False
-        self.obs_path = None
+        self.output_obs_path = None
         self.test = False
         if output_maps_path != None:
             self.write_maps = True
@@ -126,9 +118,9 @@ class Options:
         if metric_score_path != None:
             self.write_metric_score = True
             self.metric_score_path = self.check_path(metric_score_path)
-        if obs_path != None:
+        if output_obs_path != None:
             self.write_obs = True
-            self.obs_path = self.check_path(obs_path)
+            self.output_obs_path = self.check_path(output_obs_path)
         if climate_signal_path != None:
             self.write_climate_signal = True
             self.climate_signal_path = self.check_path(climate_signal_path)
@@ -154,7 +146,7 @@ class Options:
         print("  climate signal write =", self.write_climate_signal,
               ", path =", self.climate_signal_path)
         print("  obs write =", self.write_obs,
-              ", path =", self.obs_path)
+              ", obs_output_path =", self.output_obs_path)
         print("  test =", self.test)
 
 
@@ -163,48 +155,6 @@ def check_arrays(A, B, array_type):
     if res:
         print(f"Testing Error: Input {array_type} missing", res)
         sys.exit()
-
-
-def create_comparison_combinations(comparison_paths):
-    method_combinations = itertools.product(downscaling_methods, repeat=2)
-    method_paths = ['_'.join(items) for items in method_combinations]
-    model_combinations = itertools.product(climate_models, repeat=2)
-    model_paths = ['_'.join(items) for items in model_combinations]
-    time_combinations = itertools.product(time_slices, repeat=2)
-    time_paths = ['_'.join(items) for items in time_combinations]
-    all_combinations = itertools.product(method_paths, model_paths, time_paths)
-    comparison_path_combinations = ['/'.join(items) for items in all_combinations]
-    return comparison_path_combinations
-
-def comparisons():
-    print("--- Starting Zarr Comparison Data Maps Setup ---")
-    library_check()
-    downscaling_methods = ['icar'] # !!!! TESTING ONLY, REMOVE LATER !!!!
-    comparison_paths = handleArgs.get_comparison_arguments(downscaling_methods,
-                                                           climate_models,
-                                                           time_slice_strs)
-    comparison_path_combinations = create_comparison_combinations(comparison_paths)
-
-    var_name = 'climate'
-    count = 0
-    for comparisons in comparison_path_combinations:
-        (z1_input_path, z2_input_path) = comparisons
-        z1 = zarr.open_group(z1_input_path, mode='r')
-        z2 = zarr.open_group(z2_input_path, mode='r')
-        zdiff = zarr.open_group('data/example.zarr', mode='a')
-
-        groups = []
-        for name, value in z1.groups():
-            groups.append(name + '/' + var_name)
-
-
-        break
-
-        count += 1
-        if (count == 2):
-            break
-
-    print('Fin')
 
 
 def writeDatasetToZarr(output_path, dataset,
@@ -234,8 +184,8 @@ def writeDatasetToZarr(output_path, dataset,
         print(f'writing map {dataset.file_path} to dir {output_path}')
     elif (write_metric_score):
         print(f'writing metric {dataset.file_path} to dir {output_path}')
-    # elif (write_obs):
-    #     print('writing obs to:', dataset.obs)
+    elif (write_obs):
+        print(f'writing obs {dataset.file_path} to dir {output_path}')
     else:
         print('Bad write choice')
         sys.exit()
@@ -331,22 +281,27 @@ def writeDatasetToZarr(output_path, dataset,
     if (write_climate_signal):
         write_path = output_path + method_s + '/' + model_s + '/' + dataset.era
     if (write_metric_score):
-        write_path = output_path + dataset.region + '/' + method_s + '/' + \
+        write_path = output_path + method_s + '/' + \
             model_s + '/' + dataset.era
+        # MORE COMPLETE ONE, OLD WAY FOR NOW
+        # write_path = output_path + dataset.region + '/' + method_s + '/' + \
+        #     model_s + '/' + dataset.era
     elif (write_maps):
-        write_path = output_path + dataset.region + '/' + method_s + '/' + \
+        write_path = output_path + method_s + '/' + \
             model_s + '/' + dataset.era
+        # write_path = output_path + dataset.region + '/' + method_s + '/' + \
+        #     model_s + '/' + dataset.era
     elif (write_obs):
         # write_obs_to_zarr(ds, ob.lower().replace('-','_'))
-        ob_filename = os.path.basename(dataset.obs).split(".ds")[0]
+        # ob_filename = os.path.basename(dataset.obs).split(".ds")[0]
         write_path = output_path + \
-            ob_filename.lower().replace('-','_') + '/' + \
-            time_slice_str
-        # print("Write ob to Zarr file", write_path)
+            dataset.obs.lower().replace('-','_') + '/' + \
+            dataset.era
+        print("Write ob to Zarr file", write_path)
 
     write_to_zarr(dz, write_path)
-    print("small fin", 'output_path=',output_path)
-    sys.exit()
+    # print("small fin", 'output_path=',output_path)
+    # sys.exit()
 
 
 def write_to_zarr(ds, output_path, zarr_file='data.zarr'):
@@ -366,34 +321,73 @@ def findDatasets(input_path, suffix, ds_type):
     for filename in os.listdir(input_path):
         if filename.endswith(suffix):
             parts = filename.split(".")
-            if len(parts) >= 8:
-                # filename in format of
-                # [cm].[dm].[era].ds.[region].[suffix]
-                climate_model = parts[0]
-                downscaling_method = parts[1]
-                era = parts[2] + '.' + parts[3]
-                region = parts[5]
-                file_path = input_path + '/' + \
-                    climate_model + '.' + \
-                    downscaling_method + '.' + \
-                    era + '.' + \
-                    'ds.' + \
-                    region + \
-                    suffix
+            if len(parts) != 9:
+                print("Error: can't parse maps file, len(parts) != 6")
+                sys.exit()
+            # filename in format of
+            # [cm].[dm].[era].ds.[region].[suffix]
+            climate_model = parts[0]
+            downscaling_method = parts[1]
+            era = parts[2] + '.' + parts[3]
+            region = parts[5]
+            file_path = input_path + '/' + \
+                climate_model + '.' + \
+                downscaling_method + '.' + \
+                era + '.' + \
+                'ds.' + \
+                region + \
+                suffix
 
-                if os.path.exists(file_path):
-                    ds = Dataset(downscaling_method,
-                                 climate_model,
-                                 era,
-                                 region,
-                                 ds_type,
-                                 file_path)
-                    datasets.append(ds)
-                else:
-                    print("Warning: file path doesn't exist:", file_path)
-                    print("Parsing failed, exiting...")
-                    sys.exit()
+            if os.path.exists(file_path):
+                ds = Dataset(file_path,
+                             ds_type,
+                             era,
+                             region,
+                             method=downscaling_method,
+                             model=climate_model)
+                datasets.append(ds)
+            else:
+                print("Warning: file path doesn't exist:", file_path)
+                print("Parsing failed, exiting...")
+                sys.exit()
     return datasets
+
+def findObsDatasets(input_path, suffix, ds_type):
+    datasets = []
+
+    for filename in os.listdir(input_path):
+        if filename.endswith(suffix):
+            parts = filename.split(".")
+            if len(parts) != 6:
+                print("Error: can't parse obs file, len(parts) != 6")
+
+            # filename in format of
+            # [obs].ds.[region].[suffix]
+            obs = parts[0]
+            region = parts[2]
+
+            era = '1980_2010'
+
+            # recreate file_path to check parsing
+            file_path = input_path + '/' + \
+                obs + '.' + \
+                'ds.' + \
+                region + \
+                suffix
+
+            if os.path.exists(file_path):
+                ds = Dataset(file_path,
+                             ds_type,
+                             era,
+                             region,
+                             obs=obs)
+                datasets.append(ds)
+            else:
+                print("Warning: file path doesn't exist:", file_path)
+                print("Parsing failed, exiting...")
+                sys.exit()
+    return datasets
+
 
 
 # MIROC5.ICAR.hist.1981-2004.ds.DesertSouthwest.metrics.nc
@@ -454,30 +448,30 @@ def handleClimateSignalArgs(input_path):
     return datasets
 
 
-def findObservationDatasets(obs_path, suffix):
-    datasets = []
-    files = glob.glob(obs_path+"/obs.*"+suffix)
-    for f in files:
-        base = os.path.basename(f)   # e.g., obs.ABCD.metrics.nc
-        # Extract the dataset name between 'obs.' and '.metrics.nc'
-        if base.startswith("obs.") and base.endswith(suffix):
-            dataset_name = base[len("obs."):-len(suffix)]
-            datasets.append(dataset_name)
-    global test
-    if (test):
-        check_arrays(observation_datasets_test, datasets,
-                     'observational datasets')
-    return datasets
+# def findObservationDatasets(obs_path, suffix):
+#     datasets = []
+#     files = glob.glob(obs_path+"/obs.*"+suffix)
+#     for f in files:
+#         base = os.path.basename(f)   # e.g., obs.ABCD.metrics.nc
+#         # Extract the dataset name between 'obs.' and '.metrics.nc'
+#         if base.startswith("obs.") and base.endswith(suffix):
+#             dataset_name = base[len("obs."):-len(suffix)]
+#             datasets.append(dataset_name)
+#     global test
+#     if (test):
+#         check_arrays(observation_datasets_test, datasets,
+#                      'observational datasets')
+#     return datasets
 
-def handleObsArgs(input_obs_path, suffix):
-    datasets = []
-    obs_datasets = findObservationDatasets(input_obs_path, suffix)
-    for ob in obs_datasets:
-        obs_path = input_obs_path+'/obs.'+ob+'.metric.maps.nc'
-        if os.path.exists(obs_path):
-                datasets.append(Dataset(obs=obs_path))
+# def handleObsArgs(input_obs_path, suffix):
+#     datasets = []
+#     obs_datasets = findObservationDatasets(input_obs_path, suffix)
+#     for ob in obs_datasets:
+#         obs_path = input_obs_path+'/obs.'+ob+'.metric.maps.nc'
+#         if os.path.exists(obs_path):
+#                 datasets.append(Dataset(obs=obs_path))
 
-    return datasets
+#     return datasets
 
 def checkCLA(args):
     if (args.output_maps_path == None and
@@ -539,20 +533,40 @@ def main():
     # process_obs()
 
     print('---')
-    past_datasets = []
-    future_datasets = []
     metric_score_datasets = []
     climate_signal_datasets = []
     obs_datasets = []
-    if options.write_maps: # todo
-        # future_datasets = handlePastFutureArgs(options.input_path, FUTURE)
+
+    if options.write_maps:
         maps_datasets = findDatasets(options.input_maps_path,
                                      '.metric.maps.nc',
-                                     'maps')
+                                     'map')
+        for dataset in maps_datasets:
+            writeDatasetToZarr(options.output_maps_path, dataset,
+                               write_maps = True)
+
+    if options.write_obs:
+        obs_datasets = findObsDatasets(options.input_obs_path,
+                                    '.metric.maps.nc',
+                                    'map')
+        for dataset in obs_datasets:
+            dataset.print()
+            writeDatasetToZarr(options.output_obs_path, dataset,
+                               write_obs = True)
+
+        # todo: obs_metrics
+        # obs_metrics = findDatasets(options.input_obs_path,
+        #                             '.metric.maps.nc',
+                                    # 'metric')
+
+
+    sys.exit('----debugging fin-----')
+
+
     if options.write_metric_score: # complete
         metric_score_datasets = findDatasets(options.input_metrics_path,
                                              '.metrics.nc',
-                                             'metrics')
+                                             'metric')
 
     # --- TO REFACTOR ---
     #     # metric_score_datasets.write_
@@ -569,8 +583,6 @@ def main():
     # sys.exit()
 
     # --- process datasets to write to zarr
-    count = 0
-    max_count=999999
 
     for dataset in metric_score_datasets:
         count+=1
@@ -594,41 +606,6 @@ def main():
         if (count > max_count):
             print(max_count, "max count reached")
             break
-
-    # for dataset in future_datasets:
-    #     count+=1
-    #     writeDatasetToZarr(options.future_path, dataset,
-    #                        write_future = True)
-    #     if (count > max_count):
-    #         print(max_count, "max count reached")
-    #         break
-
-    for dataset in maps_datasets:
-        count+=1
-        writeDatasetToZarr(options.output_maps_path, dataset,
-                           write_maps = True)
-        if (count > max_count):
-            print(max_count, "max count reached")
-            break
-
-    # write obs maps and metrics
-    for dataset in obs_maps_datasets:
-        count+=1
-        writeDatasetToZarr(options.obs_path, dataset,
-                           write_obs = True)
-        if (count > max_count):
-            print(max_count, "max count reached")
-            break
-    # for dataset in obs__metricsdatasets:
-    #     count+=1
-    #     writeDatasetToZarr(options.obs_path, dataset,
-    #                        write_obs = True)
-    #     if (count > max_count):
-    #         print(max_count, "max count reached")
-    #         break
-
-
-
 
     print('---fin---')
     sys.exit()
@@ -681,4 +658,3 @@ def convert_to_zarr_format(ds):
 
 if __name__ == "__main__":
     main()
-    # comparisons()
