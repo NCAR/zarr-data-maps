@@ -1,4 +1,5 @@
 import argparse
+from collections import defaultdict
 import glob
 import os
 import pandas as pd
@@ -8,6 +9,7 @@ import rioxarray
 import sys
 import xarray as xr
 import xesmf as xe
+import yaml
 import zarr
 from tools import dimensionNames, handleArgs
 
@@ -53,6 +55,7 @@ observation_datasets_test = ['global', 'Midwest', 'Northeast',
                              'NorthernGreatPlains', 'Northwest', 'Southeast',
                              'SouthernGreatPlains', 'Southwest']
 
+
 debug=False
 if (debug):
     downscaling_methods = ['ICAR']
@@ -70,7 +73,7 @@ CLIMATE_SIGNAL=2
 
 class Dataset:
     def __init__(self, file_path, ds_type, era, region,
-                 method=None, model=None, obs=None):
+                 method=None, model=None, obs=None, ens=None):
         if not os.path.exists(file_path):
             print("ERROR: file path does not exist:", file_path)
             sys.exit()
@@ -79,6 +82,7 @@ class Dataset:
         self.model = model
         self.era = era
         self.region = region
+        self.ens = ens
         self.ds_type = ds_type
         self.file_path = file_path
     def print(self):
@@ -90,6 +94,7 @@ class Dataset:
         print("  method =", self.method)
         print("  model =", self.model)
         print("  obs =", self.obs)
+        print("  ens =", self.ens)
 
 
 
@@ -149,6 +154,11 @@ class Options:
               ", obs_output_path =", self.output_obs_path)
         print("  test =", self.test)
 
+# change foo: bar entries to foo: "bar"
+def quoted_presenter(dumper, data):
+    return dumper.represent_scalar("tag:yaml.org,2002:str", data, style='"')
+yaml.add_representer(str, quoted_presenter)
+
 
 def check_arrays(A, B, array_type):
     res = set(A).difference(set(B))
@@ -157,7 +167,7 @@ def check_arrays(A, B, array_type):
         sys.exit()
 
 
-def writeDatasetToZarr(output_path, dataset,
+def writeDatasetToZarr(output_path, dataset=None,
                        write_maps=False,
                        write_climate_signal=False,
                        write_metric_score=False,
@@ -190,7 +200,18 @@ def writeDatasetToZarr(output_path, dataset,
         print('Bad write choice')
         sys.exit()
 
-    ds = xr.open_dataset(dataset.file_path)
+    ens_path = ''
+    if (dataset.ens != None):
+        ds = xr.open_dataset(dataset.file_path).sel(ens=dataset.ens)
+        ds = ds.drop_vars('ens')
+        # print(ds)
+        # sys.exit()
+        ens_path = '/' + dataset.ens + '/'
+    else:
+        ds = xr.open_dataset(dataset.file_path)
+
+    if "obs" in ds.coords:
+        ds = ds.drop_vars('obs')
 
     # variables for zarr creation, value has to be four characters
     new_vars = {#'time': 'time',
@@ -279,28 +300,33 @@ def writeDatasetToZarr(output_path, dataset,
     if model != None:
         model_s = model.lower().replace('-','_')
     if (write_climate_signal):
-        write_path = output_path + method_s + '/' + model_s + '/' + dataset.era
+        write_path = output_path + method_s + '/' + model_s + '/' + dataset.era.lower().replace('-','_')
     if (write_metric_score):
         write_path = output_path + method_s + '/' + \
-            model_s + '/' + dataset.era
+            model_s + '/' + dataset.era.lower().replace('-','_')
         # MORE COMPLETE ONE, OLD WAY FOR NOW
         # write_path = output_path + dataset.region + '/' + method_s + '/' + \
         #     model_s + '/' + dataset.era
     elif (write_maps):
         write_path = output_path + method_s + '/' + \
-            model_s + '/' + dataset.era
+            model_s + '/' + dataset.era.lower().replace('-','_') + \
+            ens_path
         # write_path = output_path + dataset.region + '/' + method_s + '/' + \
         #     model_s + '/' + dataset.era
     elif (write_obs):
         # write_obs_to_zarr(ds, ob.lower().replace('-','_'))
         # ob_filename = os.path.basename(dataset.obs).split(".ds")[0]
+        # hist.[year]-[year]
         write_path = output_path + \
+            dataset.region.lower() + '/' + \
             dataset.obs.lower().replace('-','_') + '/' + \
-            dataset.era
+            'hist.' + \
+            dataset.era + \
+            ens_path
         print("Write ob to Zarr file", write_path)
 
     write_to_zarr(dz, write_path)
-    # print("small fin", 'output_path=',output_path)
+    # print("small fin", 'write_path=', write_path)
     # sys.exit()
 
 
@@ -313,6 +339,23 @@ def write_to_zarr(ds, output_path, zarr_file='data.zarr'):
     print("Done writing to zarr format")
 
 
+def addEnsembleDatasets(datasets):
+    ensemble_datasets = []
+    for d in datasets:
+        ds = xr.open_dataset(d.file_path)[['ens']]
+        for ens in ds['ens'].values:
+            new_ds = Dataset(d.file_path,
+                             d.ds_type,
+                             'hist.'+d.era,
+                             d.region,
+                             method = d.method,
+                             model = d.model,
+                             obs = d.obs,
+                             ens = ens)
+            ensemble_datasets.append(new_ds)
+    return ensemble_datasets
+
+
 # MIROC5.ICAR.hist.1981-2004.ds.DesertSouthwest.metrics.nc
 # MIROC5.ICAR.hist.1981-2004.ds.conus.metric.maps.nc
 def findDatasets(input_path, suffix, ds_type):
@@ -321,22 +364,43 @@ def findDatasets(input_path, suffix, ds_type):
     for filename in os.listdir(input_path):
         if filename.endswith(suffix):
             parts = filename.split(".")
-            if len(parts) != 9:
-                print("Error: can't parse maps file, len(parts) != 6")
+            if len(parts) not in [6,9]:
+                print("Error: can't parse maps file, len(parts) not in [7,9]")
+                print(parts)
+                print(f"len(parts) = {len(parts)}")
                 sys.exit()
-            # filename in format of
-            # [cm].[dm].[era].ds.[region].[suffix]
-            climate_model = parts[0]
-            downscaling_method = parts[1]
-            era = parts[2] + '.' + parts[3]
-            region = parts[5]
-            file_path = input_path + '/' + \
-                climate_model + '.' + \
-                downscaling_method + '.' + \
-                era + '.' + \
-                'ds.' + \
-                region + \
-                suffix
+            if len(parts) == 9:
+                # filename in format of
+                # [cm].[dm].[era].ds.[region].[suffix]
+                climate_model = parts[0]
+                downscaling_method = parts[1]
+                era = parts[2] + '.' + parts[3]
+                region = parts[5]
+                file_path = input_path + '/' + \
+                    climate_model + '.' + \
+                    downscaling_method + '.' + \
+                    era + '.' + \
+                    'ds.' + \
+                    region + \
+                    suffix
+            elif len(parts) == 6:
+                # filename in format of
+                # [cm].[dm].[region].[suffix]
+                climate_model = parts[0]
+                downscaling_method = parts[1] # actually CMIP
+                region = parts[2]
+                if downscaling_method == 'cmip5':
+                    era = '1850_2005'
+                elif downscaling_method == 'cmip6':
+                    era = '1850_2100'
+                else:
+                    print("Error: not cmip5 or cmip6")
+                    sys.exit()
+                file_path = input_path + '/' + \
+                    climate_model + '.' + \
+                    downscaling_method + '.' + \
+                    region + \
+                    suffix
 
             if os.path.exists(file_path):
                 ds = Dataset(file_path,
@@ -366,7 +430,7 @@ def findObsDatasets(input_path, suffix, ds_type):
             obs = parts[0]
             region = parts[2]
 
-            era = '1980_2010'
+            era = '1981_2004'
 
             # recreate file_path to check parsing
             file_path = input_path + '/' + \
@@ -382,6 +446,43 @@ def findObsDatasets(input_path, suffix, ds_type):
                              region,
                              obs=obs)
                 datasets.append(ds)
+            else:
+                print("Warning: file path doesn't exist:", file_path)
+                print("Parsing failed, exiting...")
+                sys.exit()
+    return datasets
+
+def findCmipObsDatasets(input_path, suffix, ds_type):
+    datasets = []
+
+    for filename in os.listdir(input_path):
+        if filename.endswith(suffix):
+            parts = filename.split(".")
+            if len(parts) != 5:
+                print("Error: can't parse obs file, len(parts) != 5")
+
+            # filename in format of
+            # [obs].ds.[region].[suffix]
+            obs = parts[0]
+            region = parts[1]
+
+            era = '1850_2100'
+
+            # recreate file_path to check parsing
+            file_path = input_path + '/' + \
+                'obs' + '.' + \
+                region + \
+                suffix
+
+            if os.path.exists(file_path):
+                d = xr.open_dataset(file_path)[['obs']]
+                for ob in d['obs'].values:
+                    ds = Dataset(file_path,
+                                 ds_type,
+                                 era,
+                                 region,
+                                 obs=ob)
+                    datasets.append(ds)
             else:
                 print("Warning: file path doesn't exist:", file_path)
                 print("Parsing failed, exiting...")
@@ -473,6 +574,33 @@ def handleClimateSignalArgs(input_path):
 
 #     return datasets
 
+def writeEnsembleYaml(maps_datasets):
+    by_model = defaultdict(set)
+    for ds in maps_datasets:
+        mod = ds.model.lower().replace('-','_')
+        ens = ds.ens.lower().replace('-','_')
+        by_model[mod].add(ens)
+        yaml_obj = {
+            "ensemble": {model: list(ens_set)
+                         for model, ens_set in by_model.items()}
+        }
+    with open("ensemble.yaml", "w") as f:
+        yaml.dump(yaml_obj, f, sort_keys=False, default_flow_style=True)
+
+def writeModelYaml(maps_datasets):
+    by_model = defaultdict(set)
+    for ds in maps_datasets:
+        mod = ds.model.lower().replace('-','_')
+        ens = ds.ens.lower().replace('-','_')
+        by_model[mod].add(ens)
+        yaml_obj = {
+            "model": {model: model
+                         for model, ens_set in by_model.items()}
+        }
+    with open("model.yaml", "w") as f:
+        yaml.dump(yaml_obj, f, sort_keys=False, default_flow_style=True)
+
+
 def checkCLA(args):
     if (args.output_maps_path == None and
         args.metric_score_path == None and
@@ -541,19 +669,32 @@ def main():
         maps_datasets = findDatasets(options.input_maps_path,
                                      '.metric.maps.nc',
                                      'map')
+
+        # ensemble of datasets that need to be added
+        if (maps_datasets[-1].method in ['cmip5', 'cmip6']):
+            maps_datasets = addEnsembleDatasets(maps_datasets)
+
+        writeEnsembleYaml(maps_datasets)
+        writeModelYaml(maps_datasets)
+
         for dataset in maps_datasets:
             writeDatasetToZarr(options.output_maps_path, dataset,
                                write_maps = True)
 
+    sys.exit()
+
     if options.write_obs:
-        obs_datasets = findObsDatasets(options.input_obs_path,
+        obs_datasets = findCmipObsDatasets(options.input_obs_path,
                                     '.metric.maps.nc',
                                     'map')
+        # obs_datasets = findObsDatasets(options.input_obs_path,
+        #                             '.metric.maps.nc',
+        #                             'map')
         for dataset in obs_datasets:
             dataset.print()
             writeDatasetToZarr(options.output_obs_path, dataset,
                                write_obs = True)
-
+            # sys.exit()
         # todo: obs_metrics
         # obs_metrics = findDatasets(options.input_obs_path,
         #                             '.metric.maps.nc',
