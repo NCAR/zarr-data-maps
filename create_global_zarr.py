@@ -73,7 +73,8 @@ CLIMATE_SIGNAL=2
 
 class Dataset:
     def __init__(self, file_path, ds_type, era, region,
-                 method=None, model=None, obs=None, ens=None):
+                 method=None, model=None, obs=None, ens=None,
+                 dif_file_path=None):
         if not os.path.exists(file_path):
             print("ERROR: file path does not exist:", file_path)
             sys.exit()
@@ -85,6 +86,7 @@ class Dataset:
         self.ens = ens
         self.ds_type = ds_type
         self.file_path = file_path
+        self.dif_file_path = dif_file_path
     def print(self):
         print("Dataset:")
         print("  file_path =", self.file_path)
@@ -95,19 +97,16 @@ class Dataset:
         print("  model =", self.model)
         print("  obs =", self.obs)
         print("  ens =", self.ens)
+        print("  dif_file_path =", self.dif_file_path)
 
 
 
 class Options:
-    def __init__(self, input_maps_path, input_obs_path, input_metrics_path,
-                 output_maps_path=None,
-                 metric_score_path=None,
-                 climate_signal_path=None,
-                 output_obs_path=None,
-                 test_in=None):
-        self.input_maps_path = input_maps_path
-        self.input_obs_path = input_obs_path
-        self.input_metrics_path = input_metrics_path
+    def __init__(self, args):
+        # default values
+        self.input_maps_path = args.input_maps_path
+        self.input_obs_path = args.input_obs_path
+        self.input_metrics_path = args.input_metrics_path
         self.write_maps = False
         self.output_maps_path = None
         self.write_metric_score = False
@@ -116,20 +115,23 @@ class Options:
         self.climate_signal_path = None
         self.write_obs = False
         self.output_obs_path = None
+        self.write_yaml = False
         self.test = False
-        if output_maps_path != None:
+        if args.output_maps_path != None:
             self.write_maps = True
-            self.output_maps_path = self.check_path(output_maps_path)
-        if metric_score_path != None:
+            self.output_maps_path = self.check_path(args.output_maps_path)
+        if args.metric_score_path != None:
             self.write_metric_score = True
-            self.metric_score_path = self.check_path(metric_score_path)
-        if output_obs_path != None:
+            self.metric_score_path = self.check_path(args.metric_score_path)
+        if args.output_obs_path != None:
             self.write_obs = True
-            self.output_obs_path = self.check_path(output_obs_path)
-        if climate_signal_path != None:
+            self.output_obs_path = self.check_path(args.output_obs_path)
+        if args.climate_signal_path != None:
             self.write_climate_signal = True
-            self.climate_signal_path = self.check_path(climate_signal_path)
-        if test_in != None:
+            self.climate_signal_path = self.check_path(args.climate_signal_path)
+        if args.write_yaml != None:
+            self.write_yaml = True
+        if args.test != None:
             self.test_in = True
             global test
             test = True
@@ -152,6 +154,7 @@ class Options:
               ", path =", self.climate_signal_path)
         print("  obs write =", self.write_obs,
               ", obs_output_path =", self.output_obs_path)
+        print("  write yaml =", self.write_yaml)
         print("  test =", self.test)
 
 # change foo: bar entries to foo: "bar"
@@ -176,12 +179,6 @@ def writeDatasetToZarr(output_path, dataset=None,
     model = dataset.model
 
     print("Opening file(s):")
-    # if (write_climate_signal):
-    #     print("past:", dataset.past_path)
-    #     ds_past = xr.open_dataset(dataset.past_path)
-    #     print("past:", dataset.future_path)
-    #     ds_future = xr.open_dataset(dataset.future_path)
-    #     ds = ds_future - ds_past
     # elif (write_metric_score):
     #     print("past:", dataset.past_path)
     #     ds_past = xr.open_dataset(dataset.past_path)
@@ -196,6 +193,12 @@ def writeDatasetToZarr(output_path, dataset=None,
         print(f'writing metric {dataset.file_path} to dir {output_path}')
     elif (write_obs):
         print(f'writing obs {dataset.file_path} to dir {output_path}')
+    if (write_climate_signal):
+        print("past:", dataset.file_path)
+        ds_past = xr.open_dataset(dataset.file_path)
+        print("future:", dataset.dif_file_path)
+        ds_future = xr.open_dataset(dataset.dif_file_path)
+        ds = ds_future - ds_past
     else:
         print('Bad write choice')
         sys.exit()
@@ -527,14 +530,18 @@ def findMetricScoreDatasets(input_path, suffix=".metrics.nc"):
     return datasets
 
 def handleClimateSignalArgs(input_path):
-    rcps = ['rcp45', 'rcp85']
+    rcps = ['rcp45.2076-2099', 'rcp85.2076-2099']
     datasets = []
+    era = 'hist.1981-2004'
 
     for cm in climate_models:
         for dm in downscaling_methods:
-            past_path = input_path+'/'+cm+'.'+dm+'.ds.conus.metric.maps.nc'
+            past_path = input_path+'/'+cm+'.'+dm+'.'+era+ \
+                '.ds.conus.metric.maps.nc'
             for rcp in rcps:
-                future_path = input_path+'/'+cm+'.'+dm+'.'+rcp+'.ds.conus.metric.maps.nc'
+                future_path = \
+                    input_path+'/'+cm+'.'+dm+\
+                    '.'+rcp+'.ds.conus.metric.maps.nc'
                 # if ('GARD' in dm):
                 #     print(cm,"and",dm)
                 #     print("past_path :", past_path)
@@ -543,8 +550,15 @@ def handleClimateSignalArgs(input_path):
                 if os.path.exists(past_path) and os.path.exists(future_path):
                     # if ('GARD' in dm):
                     #     print('exists for', rcp)
-                    datasets.append(Dataset(dm, cm, past_path, future_path, rcp=rcp))
-    # print('fin')
+                    datasets.append(Dataset(past_path, 'maps',
+                                            era=rcp, 
+                                            region='conus', 
+                                            method=dm, 
+                                            model=cm,
+                                            dif_file_path=future_path))
+                # else:
+                #     print("paths not found:", past_path, "or", future_path)
+    # print('handleClimateSignalArgs fin')
     # sys.exit()
     return datasets
 
@@ -576,7 +590,11 @@ def handleClimateSignalArgs(input_path):
 
 def writeEnsembleYaml(maps_datasets):
     by_model = defaultdict(set)
+    count = 0
     for ds in maps_datasets:
+        # count += 1
+        # if count > 5:
+        #     continue
         mod = ds.model.lower().replace('-','_')
         ens = ds.ens.lower().replace('-','_')
         by_model[mod].add(ens)
@@ -584,6 +602,13 @@ def writeEnsembleYaml(maps_datasets):
             "ensemble": {model: list(ens_set)
                          for model, ens_set in by_model.items()}
         }
+
+    # sort yaml object
+    yaml_obj['ensemble'] = {
+        model: sorted(members)
+        for model, members in sorted(yaml_obj['ensemble'].items())
+    }
+
     with open("ensemble.yaml", "w") as f:
         yaml.dump(yaml_obj, f, sort_keys=False, default_flow_style=True)
 
@@ -595,17 +620,30 @@ def writeModelYaml(maps_datasets):
         by_model[mod].add(ens)
         yaml_obj = {
             "model": {model: model
-                         for model, ens_set in by_model.items()}
+                         for model, ens_set in sorted(by_model.items())}
         }
+
+    # sort yaml object
+    yaml_obj['model'] = {
+        k: v
+        for k, v in sorted(yaml_obj["model"].items())
+    }
+    # yaml_obj['model'] = {
+    #     model: sorted(members)
+    #     # for model, members in sorted(yaml_obj['model'].items())
+    # }
+
     with open("model.yaml", "w") as f:
         yaml.dump(yaml_obj, f, sort_keys=False, default_flow_style=True)
 
 
 def checkCLA(args):
+    if (args.write_yaml):
+        return
     if (args.output_maps_path == None and
         args.metric_score_path == None and
         args.climate_signal_path == None and
-        args.obs_path == None):
+        args.output_obs_path == None):
         print("ERROR: maps, metric-score, or climate-signal options are required")
         print(parser.print_help())
         sys.exit(1)
@@ -626,8 +664,10 @@ def parseArgs():
                        help="Write (model_data - obs_data) dataset")
     group.add_argument("--climate-signal", nargs=1, dest="climate_signal_path",
                        help="Write climate signal data to passed path")
-    group.add_argument("--obs", nargs=1, dest="obs_path",
+    group.add_argument("--obs", nargs=1, dest="output_obs_path",
                        help="Write observation dataset to passed path")
+    parser.add_argument("--write-yaml", action="store_true", dest="write_yaml",
+                        help="Write Yaml Files")
     parser.add_argument("--test", action="store_true",
                         help="Test inputs")
 
@@ -638,16 +678,7 @@ def parseArgs():
 def parseCLA():
     args = parseArgs()
     checkCLA(args)
-
-    options = Options(args.input_maps_path,
-                      args.input_obs_path,
-                      args.input_metrics_path,
-                      args.output_maps_path,
-                      args.metric_score_path,
-                      args.climate_signal_path,
-                      args.obs_path,
-                      args.test)
-
+    options = Options(args)
     return options
 
 def main():
@@ -656,7 +687,9 @@ def main():
 
     # parse command line arguments
     options = parseCLA()
+    print("post options")
     options.print()
+
     # organize this better in the future
     # process_obs()
 
@@ -665,6 +698,16 @@ def main():
     climate_signal_datasets = []
     obs_datasets = []
 
+    if options.write_yaml:
+        maps_datasets = findDatasets(options.input_maps_path,
+                                     '.metric.maps.nc',
+                                     'map')
+        if (maps_datasets[-1].method in ['cmip5', 'cmip6']):
+            maps_datasets = addEnsembleDatasets(maps_datasets)
+            writeEnsembleYaml(maps_datasets)
+        writeModelYaml(maps_datasets)
+        
+    
     if options.write_maps:
         maps_datasets = findDatasets(options.input_maps_path,
                                      '.metric.maps.nc',
@@ -673,15 +716,12 @@ def main():
         # ensemble of datasets that need to be added
         if (maps_datasets[-1].method in ['cmip5', 'cmip6']):
             maps_datasets = addEnsembleDatasets(maps_datasets)
-
-        writeEnsembleYaml(maps_datasets)
+            writeEnsembleYaml(maps_datasets)
         writeModelYaml(maps_datasets)
 
         for dataset in maps_datasets:
             writeDatasetToZarr(options.output_maps_path, dataset,
                                write_maps = True)
-
-    sys.exit()
 
     if options.write_obs:
         obs_datasets = findCmipObsDatasets(options.input_obs_path,
@@ -700,53 +740,46 @@ def main():
         #                             '.metric.maps.nc',
                                     # 'metric')
 
-
+    if options.write_climate_signal: # todo
+        climate_signal_datasets = handleClimateSignalArgs(options.input_maps_path)
+        for dataset in climate_signal_datasets:
+            dataset.print()
+            writeDatasetToZarr(options.climate_signal_path, dataset,
+                               write_climate_signal = True)
     sys.exit('----debugging fin-----')
 
-
-    if options.write_metric_score: # complete
+        
+    # TODO  
+    # --- TO REFACTOR ---
+    if options.write_metric_score: 
         metric_score_datasets = findDatasets(options.input_metrics_path,
                                              '.metrics.nc',
                                              'metric')
-
-    # --- TO REFACTOR ---
+        for dataset in maps_datasets:
+            dataset.print()
+            sys.exit('----debugging fin-----')
     #     # metric_score_datasets.write_
-    # if options.write_climate_signal: # todo
-    #     climate_signal_datasets = handleClimateSignalArgs(options.input_path)
     # if options.write_obs: # todo
     #     obs_maps_datasets = handleObsArgs(options.input_obs_path,
     #                                       '.metric.maps.nc')
     #     obs_metrics_datasets = handleObsArgs(options.input_obs_path,
     #                                          '.metrics.nc')
 
+    # # --- process datasets to write to zarr
 
-    # options.print()
-    # sys.exit()
-
-    # --- process datasets to write to zarr
-
-    for dataset in metric_score_datasets:
-        count+=1
-        dataset.print()
-        sys.exit()
-        # question is how to order the datasets now?
-        writeDatasetToZarr(options.metric_score_path, dataset,
-                           write_metric_score = True)
-        if (count > max_count):
-            print(max_count, "max count reached")
-            break
+    # for dataset in metric_score_datasets:
+    #     count+=1
+    #     dataset.print()
+    #     sys.exit()
+    #     # question is how to order the datasets now?
+    #     writeDatasetToZarr(options.metric_score_path, dataset,
+    #                        write_metric_score = True)
+    #     if (count > max_count):
+    #         print(max_count, "max count reached")
+    #         break
 
     # print('---early fin---')
     # sys.exit()
-
-    for dataset in climate_signal_datasets:
-        print("Attempting to write ds to zarr for climate signal")
-        count+=1
-        writeDatasetToZarr(options.climate_signal_path, dataset,
-                           write_climate_signal = True)
-        if (count > max_count):
-            print(max_count, "max count reached")
-            break
 
     print('---fin---')
     sys.exit()
