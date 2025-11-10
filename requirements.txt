@@ -1,4 +1,4 @@
-ndpyramid=0.1.0
+ndpyramid=0.3.0
 netcdf4
 xarray
 rioxarray
