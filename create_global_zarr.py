@@ -1,6 +1,7 @@
 import argparse
 from collections import defaultdict
 import glob
+import itertools
 import json
 import os
 import pandas as pd
@@ -9,7 +10,7 @@ import numpy as np
 import rioxarray
 import sys
 import xarray as xr
-import xesmf as xe
+# import xesmf as xe
 import yaml
 import zarr
 from tools import dimensionNames, handleArgs
@@ -127,18 +128,28 @@ class Dataset:
 class Options:
     def __init__(self, args):
         # default values
+        # 3 requires paths
         self.input_maps_path = args.input_maps_path
         self.input_obs_path = args.input_obs_path
         self.input_metrics_path = args.input_metrics_path
-        self.write_maps = False
-        self.output_maps_path = None
-        self.write_metric_score = False
-        self.metric_score_path = None
+        # --climate-signal
         self.write_climate_signal = False
         self.climate_signal_path = None
+        # --maps
+        self.write_maps = False
+        self.output_maps_path = None
+        # --metric-score
+        self.write_metric_score = False
+        self.metric_score_path = None
+        # --time-series
+        self.write_timeseries = False
+        self.timeseries_path = None
+        # -- obs
         self.write_obs = False
         self.output_obs_path = None
+        # --write-yaml
         self.write_yaml = False
+        # --test
         self.test = False
         if args.output_maps_path != None:
             self.write_maps = True
@@ -152,6 +163,9 @@ class Options:
         if args.climate_signal_path != None:
             self.write_climate_signal = True
             self.climate_signal_path = self.check_path(args.climate_signal_path)
+        if args.timeseries_path != None:
+            self.write_timeseries = True
+            self.timeseries_path = self.check_path(args.timeseries_path)
         if args.write_yaml == True:
             self.write_yaml = True
         if args.test != None:
@@ -197,7 +211,8 @@ def writeDatasetToZarr(output_path, dataset=None,
                        write_maps=False,
                        write_climate_signal=False,
                        write_metric_score=False,
-                       write_obs=False):
+                       write_obs=False,
+                       write_timeseries=False):
     method = dataset.method
     model = dataset.model
 
@@ -217,32 +232,61 @@ def writeDatasetToZarr(output_path, dataset=None,
     elif (write_obs):
         print(f'writing obs {dataset.file_path} to dir {output_path}')
     elif (write_climate_signal):
+        # output_path += dataset.region
         print("past:", dataset.file_path)
-        ds_past = xr.open_dataset(dataset.file_path)
         print("future:", dataset.dif_file_path)
-        ds_future = xr.open_dataset(dataset.dif_file_path)
-        ds = ds_future - ds_past
+        print(f'writing climate signal {dataset.file_path} to dir {output_path}')
+    elif(write_timeseries):
+        print(f'writing timeseries {dataset.file_path} to dir {output_path}')
     else:
         print('Bad write choice')
         sys.exit()
 
+    # open datasets
     ens_path = ''
-    if (dataset.ens != None):
+    if (write_climate_signal):
+        ds_past = xr.open_dataset(dataset.file_path)
+        ds_future = xr.open_dataset(dataset.dif_file_path)
+        ds = ds_future - ds_past
+    elif (write_timeseries):
+        print("--- time series ---")
+        ds = xr.open_dataset(dataset.file_path).sel(ens=dataset.ens)
+        ds = ds.drop_vars('ens')
+        print(ds.data_vars)
+        vars_to_keep =  [
+            'jja_t', 'jja_pr',
+            'mam_t', 'mam_pr',
+            'son_t', 'son_pr',
+            'djf_t', 'djf_pr',
+        ]
+        ds = ds[vars_to_keep]
+        ds = add_time_random_walk(ds)
+
+        # print(ds)
+        # sys.exit()
+        # wanted =
+        # ds = ds0[[v for v in wanted if v in ds0.data_vars]]
+    elif (dataset.ens != None):
         ds = xr.open_dataset(dataset.file_path).sel(ens=dataset.ens)
         ds = ds.drop_vars('ens')
         # print(ds)
         # sys.exit()
         ens_path = '/' + dataset.ens + '/'
     elif (dataset.obs != None):
-        ds = xr.open_dataset(dataset.file_path).sel(obs=dataset.obs)
-        ds = ds.drop_vars('obs')
+        ds = xr.open_dataset(dataset.file_path)
+        # GLOBAL OBS OPTIONS
+        # ds = xr.open_dataset(dataset.file_path).sel(obs=dataset.obs)
+        # ds = ds.drop_vars('obs')
         # print(ds)
         # sys.exit()
     else:
         ds = xr.open_dataset(dataset.file_path)
 
+
     if "obs" in ds.coords:
         ds = ds.drop_vars('obs')
+
+    print(ds)
 
     # variables for zarr creation, value has to be four characters
     new_vars = {#'time': 'time',
@@ -267,6 +311,12 @@ def writeDatasetToZarr(output_path, dataset=None,
         'jja_p':'jjap',
         'son_t':'sont',
         'son_p':'sonp',
+        # for time series
+        'djf_pr':'djfp',
+        'mam_pr':'mamp',
+        'jja_pr':'jjap',
+        'son_pr':'sonp',
+        # ---
         'ann_t':'annt',
         'ann_p':'annp',
         'ann_snow':'anns',
@@ -275,6 +325,8 @@ def writeDatasetToZarr(output_path, dataset=None,
         'drought_1yr':'d1yr',
         'drought_2yr':'d2yr',
         'drought_5yr':'d5yr',
+        'wt_clim':'wtcl',
+        'wt_day_to_day':'wtds',
     }
 
     # lowercase dimension names
@@ -289,10 +341,16 @@ def writeDatasetToZarr(output_path, dataset=None,
                         if k in ds.variables or k in ds.dims}
     ds = ds.rename(valid_rename_map)
 
-    print("---")
-    print("ds")
-    print(ds)
-    print("---")
+    bad_names = any(len(v) != 4 for v in list(ds.data_vars))
+
+    if (bad_names):
+        print("---")
+        print("ds")
+        print(ds)
+        print("vars:", list(ds.data_vars))
+        print("---")
+        print("error: some of the names are the wrong length, != 4")
+        sys.exit()
 
     # zarr format requires variables four characters in length
     fixed_length = 4
@@ -312,6 +370,8 @@ def writeDatasetToZarr(output_path, dataset=None,
     var_names_U4 = [s[:fixed_length].ljust(fixed_length) for s in variables]
     ds = ds.assign_coords(band=var_names_U4)
     ds = ds.drop_vars(set(ds.data_vars) - set(['climate']))
+    # print(ds)
+    # sys.exit()
     # --- clean up types
     # print(" - clean up types")
     # month to int type
@@ -356,9 +416,12 @@ def writeDatasetToZarr(output_path, dataset=None,
             ens_path
         print("Write ob to Zarr file", write_path)
 
-    write_to_zarr(dz, write_path)
-    # print("small fin", 'write_path=', write_path)
+    # ds.to_netcdf("foo.nc")
     # sys.exit()
+
+    write_to_zarr(dz, write_path)
+    print('fin writeDatasetToZarr : write_path=', write_path)
+    sys.exit()
 
 
 def write_to_zarr(ds, output_path, zarr_file='data.zarr'):
@@ -371,6 +434,22 @@ def write_to_zarr(ds, output_path, zarr_file='data.zarr'):
 
 
 def addEnsembleDatasets(datasets):
+    ensemble_datasets = []
+    for d in datasets:
+        ds = xr.open_dataset(d.file_path)[['ens']]
+        for ens in ds['ens'].values:
+            new_ds = Dataset(d.file_path,
+                             d.ds_type,
+                             'hist.'+d.era,
+                             d.region,
+                             method = d.method,
+                             model = d.model,
+                             obs = d.obs,
+                             ens = ens)
+            ensemble_datasets.append(new_ds)
+    return ensemble_datasets
+
+def addTimeseriesDatasets(datasets):
     ensemble_datasets = []
     for d in datasets:
         ds = xr.open_dataset(d.file_path)[['ens']]
@@ -418,16 +497,34 @@ def checkMetricObsEquality(datasets):
 # MIROC5.ICAR.hist.1981-2004.ds.conus.metric.maps.nc
 def findDatasets(input_path, suffix, ds_type):
     datasets = []
+    print(ds_type)
     # print("ARGS:", input_path, suffix, ds_type)
     for filename in os.listdir(input_path):
         if filename.endswith(suffix):
             parts = filename.split(".")
-            if len(parts) not in [6,8,9]:
+            if ds_type == 'timeseries':
+                # filename in format of
+                # [cm].[dm].historical.global_metrics.nc
+                climate_model = parts[0]
+                downscaling_method = parts[1] # actually CMIP
+                region = 'global'
+                if downscaling_method == 'cmip5':
+                    era = '1850_2005'
+                elif downscaling_method == 'cmip6':
+                    era = '1850_2100'
+                else:
+                    print("Error: not cmip5 or cmip6")
+                    sys.exit()
+                file_path = input_path + '/' + \
+                    climate_model + '.' + \
+                    downscaling_method + '.' + \
+                    suffix
+            elif len(parts) not in [6,8,9]:
                 print("Error: can't parse maps file, len(parts) not in [6,8,9]")
                 print(parts)
                 print(f"len(parts) = {len(parts)}")
                 sys.exit()
-            if len(parts) == 9:
+            elif len(parts) == 9:
                 # filename in format of
                 # [cm].[dm].[era].ds.[region].[suffix]
                 climate_model = parts[0]
@@ -569,17 +666,28 @@ def findCmipObsDatasets(input_path, suffix, ds_type):
 
 def handleClimateSignalArgs(input_path):
     rcps = ['rcp45.2076-2099', 'rcp85.2076-2099']
+    rcps += ['rcp45.2056-2079', 'rcp85.2056-2079']
+    rcps += ['rcp45.2036-2059', 'rcp85.2036-2059']
+
     datasets = []
     era = 'hist.1981-2004'
+
+    regions = ['DesertSouthwest',  'GreatLakes',  'GulfCoast',
+               'MidAtlantic',  'MountainWest',  'NorthAtlantic',
+               'NorthernPlains',  'PacificNorthwest',  'PacificSouthwest']
+    region='conus'
+    if (False):
+        region = regions[0]
+        input_path += '/'+ region
 
     for cm in climate_models:
         for dm in downscaling_methods:
             past_path = input_path+'/'+cm+'.'+dm+'.'+era+ \
-                '.ds.conus.metric.maps.nc'
+                '.ds.'+region+'.metric.maps.nc'
             for rcp in rcps:
                 future_path = \
                     input_path+'/'+cm+'.'+dm+\
-                    '.'+rcp+'.ds.conus.metric.maps.nc'
+                    '.'+rcp+'.ds.'+region+'.metric.maps.nc'
                 # if ('GARD' in dm):
                 #     print(cm,"and",dm)
                 #     print("past_path :", past_path)
@@ -590,14 +698,14 @@ def handleClimateSignalArgs(input_path):
                     #     print('exists for', rcp)
                     datasets.append(Dataset(past_path, 'maps',
                                             era=rcp,
-                                            region='conus',
+                                            region=region,
                                             method=dm,
                                             model=cm,
                                             dif_file_path=future_path))
                 # else:
-                #     print("paths not found:", past_path, "or", future_path)
-    # print('handleClimateSignalArgs fin')
-    # sys.exit()
+    #                 print("paths not found:", past_path, "or", future_path)
+    # # print('handleClimateSignalArgs fin')
+    #                 sys.exit()
     return datasets
 
 
@@ -625,6 +733,100 @@ def handleClimateSignalArgs(input_path):
 #                 datasets.append(Dataset(obs=obs_path))
 
 #     return datasets
+def prep(s):
+    return s.lower().replace('-','_')
+
+def writeMetricYamlFromFile(metric_path):
+    ds = xr.open_dataset(metric_path)
+    print(ds)
+    print("--------------------")
+
+    regions = ds['regions'].data
+    models = ds['models'].data
+    methods = ds['methods'].data
+    schemes = ds['normscheme'].data
+    metrics = list(ds.data_vars)
+
+    # remove null data
+    # ADD BACK IN LATER AS A TEST
+    methods = methods[methods != 'ICARwest']
+    # ADD BACK AFTER DEV
+    # regions = regions[:1]
+    # models = models[:2]
+    # methods = methods[:2]
+    # metrics = metrics[:1]
+
+    metrics_arr = [prep(m) for m in metrics]
+    schemes_arr = {prep(s):s for s in schemes}
+    for region in regions:
+        r = prep(region)
+        print("region = ", r)
+        model_arr = []
+        method_arr = []
+        combination_arr = []
+        for model, method in itertools.product(models, methods):
+            combination_arr.append(method + ' with ' + model)
+            model_arr.append(prep(model))
+            method_arr.append(prep(method))
+
+        yaml_obj = {
+            'num_metrics': len(metrics),
+            'num_datasets': len(combination_arr),
+            'combinations': combination_arr,
+            'combinations_downscaling': method_arr,
+            'combinations_model': model_arr,
+            'metrics': metrics_arr,
+            'schemes': schemes_arr,
+            'scores': {s: {m:[] for m in metrics} for s in schemes_arr},
+        }
+        # print(yaml_obj)
+        # sys.exit()
+        for scheme in schemes:
+            for m in metrics:
+                metric_vals = []
+                for model, method, in itertools.product(models, methods):
+                    val = ds.sel(models=model,
+                                 methods=method,
+                                 regions=region,
+                                 normscheme=scheme)[m].item()
+                    if (np.isnan(val)):
+                        val = 9999.0
+                        # print(val)
+                        # sys.exit()
+                    metric_vals.append(val)
+                yaml_obj['scores'][prep(scheme)][m] = metric_vals
+
+                # print(m, " metric_vals =", metric_vals)
+                # print("len(metric_vals) =", len(metric_vals))
+                # print("len(combination_arr) =", len(combination_arr))
+                # print("metric =", m)
+                # print("Scheme =", scheme)
+                # sys.exit()
+                # yaml_obj.update({
+                #     m: metric_vals
+                # })
+        # print(yaml_obj)
+        # sys.exit()
+            # mod = ds.model.lower().replace('-','_')
+            # ens = ds.ens.lower().replace('-','_')
+            # by_model[mod].add(ens)
+            # yaml_obj = {
+            #     "ensemble": {model: list(ens_set)
+            #                  for model, ens_set in by_model.items()}
+            # }
+
+            # with open("metrics.yaml", "w") as f:
+            #     yaml.dump(yaml_obj, f, sort_keys=False, default_flow_style=True)
+        os.makedirs("metrics", exist_ok=True)
+        with open("metrics/"+prep(region.replace(' ',''))+"_metrics.js", "w", encoding="utf-8") as f:
+            f.write("// auto-generated; do not edit\n")
+            f.write("export const metrics_settings = ")
+            json.dump(yaml_obj, f, indent=2, ensure_ascii=False, sort_keys=False)
+            f.write(";\n")
+
+
+
+
 
 def writeMetricYaml(metric_datasets, ob):
     by_model = defaultdict(set)
@@ -714,7 +916,7 @@ def writeEnsembleYaml(maps_datasets):
     with open("ensemble.yaml", "w") as f:
         yaml.dump(yaml_obj, f, sort_keys=False, default_flow_style=True)
 
-def writeModelYaml(maps_datasets):
+def writeModelYaml(maps_datasets, yaml_file, top_var):
     by_model_set = defaultdict(set)
     by_model_dict = defaultdict(dict)
     ensemble = False
@@ -724,7 +926,7 @@ def writeModelYaml(maps_datasets):
             ens = ds.ens.lower().replace('-','_')
             by_model_set[mod].add(ens)
             yaml_obj = {
-                "model": {model: model
+                top_var: {model: model
                           for model, ens_set in sorted(by_model_set.items())}
             }
             ensemble = True
@@ -735,23 +937,24 @@ def writeModelYaml(maps_datasets):
 
     default_flow_style = True
     if ensemble:
-        yaml_obj['model'] = {
+        yaml_obj[top_var] = {
             k: v
-            for k, v in sorted(yaml_obj["model"].items())
+            for k, v in sorted(yaml_obj[top_var].items())
         }
     else:
         # default_flow_style = False
         yaml_obj = {
-            "model": {
-                method.lower().replace('_','_'):
+            top_var: {
+                method.lower().replace('-','_'):
                 {k: Quoted(v) for k, v in sorted(models.items())}
                 for method, models in by_model_dict.items()
             }
         }
 
-    with open("model.yaml", "w") as f:
+    with open(yaml_file, "w") as f:
         # yaml.dump(yaml_obj, f, default_flow_style=default_flow_style)#, Dumper=PlainKeyDumper,)
         yaml.dump(yaml_obj, f,          allow_unicode=True,       Dumper=yaml.SafeDumper,  sort_keys=False, default_flow_style=default_flow_style)
+        print("wrote to", yaml_file)
 
 
 def writeObsYaml(obs_datasets):
@@ -781,29 +984,35 @@ def checkCLA(args):
     if (args.output_maps_path == None and
         args.metric_score_path == None and
         args.climate_signal_path == None and
-        args.output_obs_path == None):
-        print("ERROR: maps, metric-score, or climate-signal options are required")
-        print(parser.print_help())
+        args.output_obs_path == None and
+        args.timeseries_path == None):
+        print("ERROR: maps, metric-score, time-series or climate-signal options are required")
+        print(args)
         sys.exit(1)
 
 
 def parseArgs():
     # define argument parser
-    parser = argparse.ArgumentParser(description="Create Zarr files for ICAR Maps.")
+    parser = argparse.ArgumentParser(
+        description="Create Zarr files for ICAR Maps.")
     parser.add_argument("input_maps_path", help="Path to input map files")
     parser.add_argument("input_obs_path", help="Path to input observations")
     parser.add_argument("input_metrics_path", help="Path to input metrics")
     parser.add_argument("-v", "--verbose", action="store_true",
                         help="Enable verbose mode")
-    group = parser.add_argument_group('Output Data', 'types of output and path to write to')
+    group = parser.add_argument_group('Output Data',
+                                      'types of output and path to write to')
+    group.add_argument("--climate-signal", nargs=1, dest="climate_signal_path",
+                       help="Write climate signal data to passed path")
     group.add_argument("--maps", nargs=1, dest="output_maps_path",
                        help="Write modeled data to passed path")
     group.add_argument("--metric-score", nargs=1, dest="metric_score_path",
                        help="Write (model_data - obs_data) dataset")
-    group.add_argument("--climate-signal", nargs=1, dest="climate_signal_path",
-                       help="Write climate signal data to passed path")
     group.add_argument("--obs", nargs=1, dest="output_obs_path",
                        help="Write observation dataset to passed path")
+    group.add_argument("--time-series", nargs=1,
+                       dest="timeseries_path",
+                       help="Write time series dataset to passed path")
     parser.add_argument("--write-yaml", action="store_true", dest="write_yaml",
                         help="Write Yaml Files")
     parser.add_argument("--test", action="store_true",
@@ -843,42 +1052,54 @@ def main():
         if (maps_datasets[-1].method in ['cmip5', 'cmip6']):
             maps_datasets = addEnsembleDatasets(maps_datasets)
             writeEnsembleYaml(maps_datasets)
-        writeModelYaml(maps_datasets)
+        writeModelYaml(maps_datasets, 'model.yaml', 'model')
+
+        climate_signal_datasets = \
+            handleClimateSignalArgs(options.input_maps_path)
+        writeModelYaml(climate_signal_datasets, 'climateSignal.yaml',
+                       'model_climatesignal')
+
+        sys.exit('--- finished write yaml option ---')
 
 
     if options.write_maps:
         maps_datasets = findDatasets(options.input_maps_path,
                                      '.metric.maps.nc',
                                      'map')
+        for dataset in maps_datasets:
+            print(dataset.file_path)
+        print("Number of datasets: ", len(maps_datasets))
+        # sys.exit()
 
         # ensemble of datasets that need to be added
         if (maps_datasets[-1].method in ['cmip5', 'cmip6']):
             maps_datasets = addEnsembleDatasets(maps_datasets)
             writeEnsembleYaml(maps_datasets)
-        writeModelYaml(maps_datasets)
 
         for dataset in maps_datasets:
             writeDatasetToZarr(options.output_maps_path, dataset,
                                write_maps = True)
+        sys.exit('--- finished writing maps ---')
 
     if options.write_obs:
-        obs_datasets = findCmipObsDatasets(options.input_obs_path,
-                                    '.metric.maps.nc',
-                                    'map')
-
-        # obs_datasets = findObsDatasets(options.input_obs_path,
+        # obs_datasets = findCmipObsDatasets(options.input_obs_path,
         #                             '.metric.maps.nc',
         #                             'map')
+
+        obs_datasets = findObsDatasets(options.input_obs_path,
+                                    '.metric.maps.nc',
+                                    'map')
         for dataset in obs_datasets:
             # if dataset.region != 'global':
             #     continue
             # if dataset.obs != 'UDel':
             #     continue
             dataset.print()
+            # sys.exit()
             writeDatasetToZarr(options.output_obs_path, dataset,
                                write_obs = True)
-        # writeObsYaml(obs_datasets) # FIX THIS
-        sys.exit()
+        writeObsYaml(obs_datasets) # FIX THIS
+        sys.exit('--- done with writing obs ---')
         # todo: obs_metrics
         # obs_metrics = findDatasets(options.input_obs_path,
         #                             '.metric.maps.nc',
@@ -888,7 +1109,6 @@ def main():
         climate_signal_datasets = \
             handleClimateSignalArgs(options.input_maps_path)
         for dataset in climate_signal_datasets:
-            dataset.print()
             writeDatasetToZarr(options.climate_signal_path, dataset,
                                write_climate_signal = True)
         sys.exit('----debugging metric fin-----')
@@ -899,29 +1119,52 @@ def main():
     if options.write_metric_score:
         print("refactoring write metric score")
 
-        regions = ['DesertSouthwest',  'GreatLakes',  'GulfCoast',
-                   'MidAtlantic',  'MountainWest',  'NorthAtlantic',
-                   'NorthernPlains',  'PacificNorthwest',  'PacificSouthwest']
-        # regions = ['DesertSouthwest',  'GreatLakes']
-        # print('add back regions')
-        for r in regions:
-            print("Writing to region", r)
-            r_path = options.input_metrics_path+'/'+r
-            metric_score_datasets = findDatasets(r_path,
-                                                 '.metrics.nc',
-                                                 'metric')
-            obs = checkMetricObsEquality(metric_score_datasets)
-            metric_vars = checkMetricVarsEquality(metric_score_datasets)
-            ob = obs[1]
-            writeMetricYaml(metric_score_datasets, ob)
+        # regions = ['DesertSouthwest',  'GreatLakes',  'GulfCoast',
+        #            'MidAtlantic',  'MountainWest',  'NorthAtlantic',
+        #            'NorthernPlains',  'PacificNorthwest',  'PacificSouthwest']
+        # # regions = ['DesertSouthwest',  'GreatLakes']
+        # # print('add back regions')
+        # for r in regions:
+        #     print("Writing to region", r)
+        #     r_path = options.input_metrics_path+'/'+r
+        #     metric_score_datasets = findDatasets(r_path,
+        #                                          '.metrics.nc',
+        #                                          'metric')
+        #     obs = checkMetricObsEquality(metric_score_datasets)
+        #     metric_vars = checkMetricVarsEquality(metric_score_datasets)
+        #     ob = obs[1]
+        #     writeMetricYaml(metric_score_datasets, ob)
+        # writeMetricYaml(metric_score_datasets, ob)
+
+        # this option prints the metrics file to a yaml
+        options.print()
+        writeMetricYamlFromFile(options.input_metrics_path)
+
 
         sys.exit('----debugging metric fin-----')
 
-        # for dataset in metric_score_datasets:
-                # dataset.print()
-    #     writeDatasetToZarr(options.metric_score_path, dataset,
-    #                        write_metric_score = True)
 
+
+    if options.write_timeseries:
+        print("Writing Timeseries")
+        timeseries_datasets = findDatasets(options.input_maps_path,
+                                     'historical.global_metrics.nc',
+                                     'timeseries')
+        # add ensemble
+        if (timeseries_datasets[-1].method in ['cmip5', 'cmip6']):
+            timeseries_datasets = addTimeseriesDatasets(timeseries_datasets)
+            writeEnsembleYaml(timeseries_datasets)
+
+        for dataset in timeseries_datasets:
+            dataset.print()
+
+
+            writeDatasetToZarr(options.timeseries_path, dataset,
+                               write_timeseries = True)
+
+            sys.exit('----debugging timeseries fin-----')
+        print("Wrote Timeseries")
+    sys.exit('----debugging fin-----')
 
     # if options.write_obs: # todo
     #     obs_maps_datasets = handleObsArgs(options.input_obs_path,
@@ -929,7 +1172,6 @@ def main():
     #     obs_metrics_datasets = handleObsArgs(options.input_obs_path,
     #                                          '.metrics.nc')
 
-    sys.exit('----debugging fin-----')
 
     # # --- process datasets to write to zarr
 
@@ -995,6 +1237,35 @@ def convert_to_zarr_format(ds):
                                # levels=1, # THIS DIDN'D DO MUCH AT ALL
     print("Done Creating Pyramid")
     return dt
+
+
+def add_time_random_walk(ds, time_len=17, seed=None):
+    rng = np.random.default_rng(seed)
+    time = np.arange(1, time_len + 1)
+
+    out = {}
+    for v in ds.data_vars:
+        base = ds[v]                                   # (lat, lon)
+        base_t = base.expand_dims(time=time)           # (time, lat, lon)
+
+        # Random multipliers for t=2..T (per grid cell), first step = 1.0
+        steps = rng.choice([0.99, 1.01],
+                           size=(time_len - 1, *base.shape)).astype(base.dtype)
+        factors = np.concatenate(
+            [np.ones((1, *base.shape), dtype=base.dtype), steps],
+            axis=0
+        )
+        factors = np.cumprod(factors, axis=0)          # cumulative product over time
+
+        out[v] = xr.DataArray(
+            base_t.data * factors,
+            dims=("time", "lat", "lon"),
+            coords={"time": time, "lat": ds["lat"], "lon": ds["lon"]},
+            name=v,
+            attrs=base.attrs
+        )
+
+    return xr.Dataset(out, coords={"time": time, "lat": ds["lat"], "lon": ds["lon"]})
 
 if __name__ == "__main__":
     main()

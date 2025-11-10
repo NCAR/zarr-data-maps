@@ -6,7 +6,7 @@ import numpy as np
 import rioxarray
 import sys
 import xarray as xr
-import xesmf as xe
+# import xesmf as xe
 import zarr
 from tools import dimensionNames, handleArgs
 
