@@ -15,5 +15,6 @@ class CORSHandler(http.server.SimpleHTTPRequestHandler):
 
 # create a local server with the specified port and handler
 with socketserver.TCPServer(("", PORT), CORSHandler) as httpd:
+    print("Hosting at http://localhost:4000")
     # Start the server
     httpd.serve_forever()
