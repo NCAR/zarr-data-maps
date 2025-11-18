@@ -8,7 +8,8 @@ Requires: xarray, numpy, rasterio, shapely
 Usage:
   python make_mask_border.py foo.nc -o foo_border.geojson
   # Options:
-  #   --var MASKVAR        # name of mask variable (default: "mask")
+  #   --var MASKVAR        # name of mask variable (default: "regions")
+  #   --region             # choose region_i to subset (default: 1)
   #   --invert             # treat 0/False as inside, 1/True as outside
   #   --polygon            # write filled Polygon/MultiPolygon instead of border
   #   --with-holes         # include interior holes in the border (ignored for --polygon)
@@ -76,28 +77,42 @@ def main():
     if not nc_path.exists():
         sys.exit(f"Input not found: {nc_path}")
 
-
-    out_path = (
-        Path(args.output)
-        if args.output
-        else Path(nc_path.name).with_suffix("").with_name(nc_path.stem + ("_polygon.geojson" if args.polygon else "_border.geojson"))
-    )
-
     region_i = (
         int(args.region)
         if args.region
         else 1
     )
 
+    region_s = [
+        'Empty',
+        'North Atlantic',
+        'Mid Atlantic',
+        'Gulf Coast',
+        'Pacific Northwest',
+        'Pacific Southwest',
+        'Northern Plains',
+        'Mountain West',
+        'Great Lakes',
+        'Desert Southwest',
+
+    ]
+    print(f"Creating region {region_s[region_i]}")
+
+    out_path = (
+        Path(args.output)
+        if args.output
+        else Path(region_s[region_i].lower().replace(' ', '_')+'.geojson')
+    )
+
+
     # 1) Open and locate variables
     ds = xr.open_dataset(nc_path)
     # Select region and turn it into a bool map
-    ds['region'] = ds['regions'].where(ds.regions.data==region_i)
+    ds['regions'] = ds['regions'].where(ds['regions']==region_i)
     ds['regions'] = ds['regions'].notnull()
 
     if "lat" not in ds.coords or "lon" not in ds.coords:
         sys.exit("Expected 1-D coordinates named 'lat' and 'lon'.")
-
 
     lat = np.asarray(ds["lat"].values)
     lon = np.asarray(ds["lon"].values)
@@ -120,7 +135,6 @@ def main():
     # Convert to boolean: True = inside region
     if mask_arr.dtype == bool:
         inside = mask_arr
-        print("ARRAY BOOL with mask var =", args.var)
     else:
         # Treat non-zero and non-NaN as inside
         inside = np.asarray(mask_arr) != 0
@@ -175,10 +189,17 @@ def main():
             out_geom = poly
         geom_type = out_geom.geom_type  # LineString / MultiLineString
 
+    # geojson needs to be LineString for the plotting to work
+    mapping_out_geom = mapping(out_geom)
+    if mapping_out_geom['type'] == 'LinearRing':
+        mapping_out_geom['type'] = 'LineString'
+    # print(mapping_out_geom)
+    # print(mapping(out_geom)['type'])
+    # sys.exit()
     # 7) Write GeoJSON
     feature = {
         "type": "Feature",
-        "geometry": mapping(out_geom),
+        "geometry": mapping_out_geom,
         "properties": {
             "source": str(nc_path),
             "variable": args.var,
