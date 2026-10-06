@@ -1,4 +1,5 @@
 import argparse
+import glob
 import os
 import pandas as pd
 import ndpyramid as ndp
@@ -12,10 +13,18 @@ from tools import dimensionNames, handleArgs
 
 print("ndpyramid Version = ", ndp.__version__)
 
+# D:\>ls /glade/work/nlybarger/downscaling_metrics/cmip6/*STAR*r1i1p1f1* | less
+# D:\>ls /glade/work/nlybarger/downscaling_metrics/cmip6/*LOCA*r1i1p1f1* | less
+
 LEVELS = 4
 # LEVELS = 1
 PIXELS_PER_TILE = 512 # this one too high
 PIXELS_PER_TILE = 256
+
+CMIP6_MAP_PATTERNS = (
+    '*STAR*r1i1p1f1*',
+    '*LOCA*r1i1p1f1*',
+)
 
 
 # Define the global grid (covering the entire world)
@@ -108,7 +117,9 @@ CLIMATE_SIGNAL=2
 
 
 class Dataset:
-    def __init__(self, method=None, model=None, past=None, future=None, metric=None, rcp='', obs=None):
+    def __init__(self, method=None, model=None, past=None, future=None,
+                 metric=None, rcp='', obs=None, map_path=None, era=None,
+                 member=None, region=None):
         if (past != None) and not os.path.exists(past):
             print("ERROR: past path does not exist:", past)
             sys.exit()
@@ -121,28 +132,39 @@ class Dataset:
         if (metric != None) and not os.path.exists(metric):
             print("ERROR: metric path does not exist:", metric)
             sys.exit()
+        if (map_path != None) and not os.path.exists(map_path):
+            print("ERROR: map path does not exist:", map_path)
+            sys.exit()
         self.past_path = past
         self.future_path = future
         self.metric_path = metric
+        self.map_path = map_path
         self.method = method
         self.model = model
         self.rcp = rcp
         self.obs = obs
+        self.era = era
+        self.member = member
+        self.region = region
     def print(self):
         print("Dataset:")
         print("  past_path =", self.past_path)
         print("  future_path =", self.future_path)
         print("  metric_path =", self.metric_path)
+        print("  map_path =", self.map_path)
         print("  method =", self.method)
         print("  model =", self.model)
         print("  obs =", self.obs)
+        print("  era =", self.era)
+        print("  member =", self.member)
+        print("  region =", self.region)
 
 
 class Options:
     def __init__(self, input_path, input_obs_path, input_obs_file,
                  past_path=None, future_path=None,
                  metric_score_path=None, climate_signal_path=None,
-                 obs_path=None):
+                 obs_path=None, maps_path=None):
         self.input_path = input_path
         self.input_obs_path = input_obs_path
         self.input_obs_file = input_obs_path+'/'+input_obs_file
@@ -156,6 +178,8 @@ class Options:
         self.climate_signal_path = None
         self.write_obs = False
         self.obs_path = None
+        self.write_maps = False
+        self.maps_path = None
         if past_path != None:
             self.write_past = True
             self.past_path = self.check_path(past_path)
@@ -171,6 +195,9 @@ class Options:
         if climate_signal_path != None:
             self.write_climate_signal = True
             self.climate_signal_path = self.check_path(climate_signal_path)
+        if maps_path != None:
+            self.write_maps = True
+            self.maps_path = self.check_path(maps_path)
     def check_path(self, path, trailing_slash=True):
         if isinstance(path, list):
             path = path[0]
@@ -192,6 +219,8 @@ class Options:
               ", path =", self.climate_signal_path)
         print("  obs write =", self.write_obs,
               ", path =", self.obs_path)
+        print("  maps write =", self.write_maps,
+              ", path =", self.maps_path)
 
 
 def create_comparison_combinations(comparison_paths):
@@ -237,6 +266,7 @@ def comparisons():
 
 
 def writeDatasetToZarr(output_path, dataset,
+                       write_maps=False,
                        write_past=False, write_future=False,
                        write_climate_signal=False,
                        write_metric_score=False,
@@ -245,7 +275,10 @@ def writeDatasetToZarr(output_path, dataset,
     model = dataset.model
 
     print("Opening file(s):")
-    if (write_climate_signal):
+    if (write_maps):
+        print('map:', dataset.map_path)
+        ds = xr.open_dataset(dataset.map_path)
+    elif (write_climate_signal):
         print("past:", dataset.past_path)
         ds_past = xr.open_dataset(dataset.past_path)
         print("past:", dataset.future_path)
@@ -275,12 +308,16 @@ def writeDatasetToZarr(output_path, dataset,
             'lat': 'y',
             'lon': 'x',
             'n34pr':'n34p',
+            'n34t':'n34t',
             'ttrend':'ttre',
             'ptrend':'ptre',
             'pr90':'pr90',
             'pr99':'pr99',
+            'pr99p9':'pr99',
             't90':'t90_',
             't99':'t99_',
+            't99p9':'t99_',
+            'tpcorr':'tpco',
             'djf_t':'djft',
             'djf_p':'djfp',
             'mam_t':'mamt',
@@ -292,10 +329,37 @@ def writeDatasetToZarr(output_path, dataset,
             'ann_t':'annt',
             'ann_p':'annp',
             'ann_snow':'anns',
+            'ann_snow_iav':'ansi',
             'freezethaw':'fzth',
+            'ann_p_iav':'anpi',
+            'djf_p_iav':'djpi',
+            'mam_p_iav':'mapi',
+            'jja_p_iav':'jjpi',
+            'son_p_iav':'sopi',
+            'ann_t_iav':'anti',
+            'djf_t_iav':'djti',
+            'mam_t_iav':'mati',
+            'jja_t_iav':'jjti',
+            'son_t_iav':'soti',
+            'pr_gev_20yr':'g_20',
+            'pr_gev_50yr':'g_50',
+            'pr_gev_100yr':'g100',
+            'wet_day_frac':'wdfr',
+            'drought_1yr':'d1yr',
+            'drought_2yr':'d2yr',
+            'drought_5yr':'d5yr',
         }
 
-    ds = ds.rename(new_dims)
+    valid_rename_map = {k: v for k, v in new_dims.items()
+                        if k in ds.variables or k in ds.dims}
+    ds = ds.rename(valid_rename_map)
+
+    invalid_vars = [var for var in ds.data_vars if len(var) != 4]
+    if invalid_vars:
+        sys.exit(
+            "ERROR: no four-character map name for variables: " +
+            ', '.join(invalid_vars)
+        )
     # print("ds after rename =", ds)
     variables = list(ds.variables.keys())
     variables = [var for var in variables if var not in ['x', 'y']]
@@ -329,9 +393,12 @@ def writeDatasetToZarr(output_path, dataset,
         method_s = method.lower().replace('-','_')
     if model != None:
         model_s = model.lower().replace('-','_')
-    if (write_climate_signal):
+    if (write_maps):
+        era_s = dataset.era.lower().replace('-', '_')
+        write_path = output_path + method_s + '/' + model_s + '/' + era_s
+    elif (write_climate_signal):
         write_path = output_path + method_s + '/' + model_s + '/' + dataset.rcp
-    if (write_metric_score):
+    elif (write_metric_score):
         write_path = output_path + method_s + '/' + model_s + '/' + dataset.rcp
     elif (write_future):
         write_path = output_path + method_s + '/' + model_s + '/' + \
@@ -349,7 +416,49 @@ def writeDatasetToZarr(output_path, dataset,
 
     write_to_zarr(dz, write_path)
     print("small fin", 'output_path=',output_path)
-    sys.exit()
+
+
+def findCmip6MapDatasets(input_path):
+    """Find the requested STAR and LOCA r1i1p1f1 CMIP6 map files."""
+    matching_paths = set()
+    for pattern in CMIP6_MAP_PATTERNS:
+        matching_paths.update(glob.glob(os.path.join(input_path, pattern)))
+
+    datasets = []
+    for map_path in sorted(matching_paths):
+        if not os.path.isfile(map_path):
+            continue
+
+        filename = os.path.basename(map_path)
+        parts = filename.split('.')
+        if len(parts) != 10:
+            sys.exit(
+                f"ERROR: can't parse CMIP6 map filename with {len(parts)} "
+                f"fields: {filename}"
+            )
+
+        (model, method, member, scenario, years, cmip_generation,
+         region, metric, maps, extension) = parts
+        if (member != 'r1i1p1f1' or
+                cmip_generation != 'cmip6' or
+                metric != 'metric' or maps != 'maps' or
+                extension != 'nc'):
+            sys.exit(f"ERROR: unexpected CMIP6 map filename: {filename}")
+
+        datasets.append(Dataset(
+            method=method,
+            model=model,
+            map_path=map_path,
+            era=scenario + '.' + years,
+            member=member,
+            region=region,
+        ))
+
+    if not datasets:
+        patterns = ', '.join(CMIP6_MAP_PATTERNS)
+        sys.exit(f"ERROR: no files matching {patterns} in {input_path}")
+
+    return datasets
 
 
 
@@ -530,6 +639,8 @@ def parseCLA():
                        help="Write climate signal data to passed path")
     group.add_argument("--obs", nargs=1, dest="obs_path",
                        help="Write observation dataset to passed path")
+    group.add_argument("--maps", nargs=1, dest="maps_path",
+                       help="Write STAR and LOCA CMIP6 map data to passed path")
 
 
     # Parse the arguments
@@ -539,15 +650,16 @@ def parseCLA():
         args.future_path == None and
         args.metric_score_path == None and
         args.climate_signal_path == None and
-        args.obs_path == None):
-        print("ERROR: past, future, metric-score, or climate-signal options are required")
+        args.obs_path == None and
+        args.maps_path == None):
+        print("ERROR: maps, past, future, metric-score, or climate-signal options are required")
         print(parser.print_help())
         sys.exit(1)
 
     options = Options(args.input_path, args.input_obs_path, args.input_obs_file,
                       args.past_path, args.future_path,
                       args.metric_score_path, args.climate_signal_path,
-                      args.obs_path)
+                      args.obs_path, args.maps_path)
 
     return options
 
@@ -571,6 +683,10 @@ def main():
     metric_score_datasets = []
     climate_signal_datasets = []
     obs_datasets = []
+    maps_datasets = []
+    if options.write_maps:
+        maps_datasets = findCmip6MapDatasets(options.input_path)
+        print("Number of STAR/LOCA CMIP6 map datasets:", len(maps_datasets))
     if options.write_past:
         past_datasets = handlePastFutureArgs(options.input_path, PAST)
     if options.write_future:
@@ -594,6 +710,15 @@ def main():
     max_count=999999
 
     print("msds", metric_score_datasets)
+
+    for dataset in maps_datasets:
+        count+=1
+        dataset.print()
+        writeDatasetToZarr(options.maps_path, dataset,
+                           write_maps = True)
+        if (count > max_count):
+            print(max_count, "max count reached")
+            break
 
     for dataset in metric_score_datasets:
         count+=1
